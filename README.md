@@ -98,7 +98,9 @@ the exe, then run it. `MeetingAssistant.exe --stub` runs without keys.
 
 The exe is not code-signed. Windows SmartScreen shows a warning ("More info" →
 "Run anyway"), and on PCs with **Smart App Control** turned on Windows blocks it
-completely. On those PCs use the run-from-source steps above.
+completely. On those PCs set up from source (above) and double-click
+`MeetingAssistant.bat` instead: it starts the same app with the project's Python,
+which Windows trusts because Python itself is signed.
 
 ## Checks and measurements
 
