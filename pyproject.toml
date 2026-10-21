@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meeting-screen-assistant"
+version = "0.1.0"
+description = "Ask what was just shown and said in a video meeting. Answers are spoken aloud. Built for blind and low-vision users."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.40",
+    "python-dotenv>=1.0",
+    "numpy>=1.26",
+    "Pillow>=10.0",
+    "mss>=9.0",
+    "soxr>=0.3",
+    "PyAudioWPatch>=0.2.12; sys_platform == 'win32'",
+    "keyboard>=0.13",
+    "pyttsx3>=2.90",
+]
+
+[project.optional-dependencies]
+# Silero VAD pulls in torch (large). Without it the app falls back to a simple energy VAD.
+vad = ["silero-vad>=5.1"]
+# NVDA / JAWS output through their own APIs.
+screenreader = ["accessible_output2>=0.17"]
+eval = ["jiwer>=3.0"]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
