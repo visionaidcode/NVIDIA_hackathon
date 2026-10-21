@@ -7,6 +7,7 @@ import warnings
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 import numpy as np
@@ -34,6 +35,34 @@ class EnergyVAD:
         pass
 
 
+SILERO_ONNX = Path(__file__).parent / "data" / "silero_vad.onnx"
+SILERO_CONTEXT = 64  # samples of the previous window Silero v5 expects in front of each window at 16 kHz
+
+
+class SileroOnnxVAD:
+    """Silero VAD on onnxruntime: same model as the PyTorch one, without the 1 GB dependency."""
+
+    def __init__(self, model_path: Path = SILERO_ONNX):
+        import onnxruntime
+
+        opts = onnxruntime.SessionOptions()
+        opts.inter_op_num_threads = opts.intra_op_num_threads = 1
+        self.session = onnxruntime.InferenceSession(str(model_path), sess_options=opts,
+                                                    providers=["CPUExecutionProvider"])
+        self._sr = np.array(SAMPLE_RATE, dtype=np.int64)
+        self.reset()
+
+    def prob(self, frame: np.ndarray) -> float:
+        x = np.concatenate([self._context, frame.astype(np.float32, copy=False)])[None, :]
+        out, self._state = self.session.run(None, {"input": x, "state": self._state, "sr": self._sr})
+        self._context = x[0, -SILERO_CONTEXT:]
+        return float(out[0, 0])
+
+    def reset(self) -> None:
+        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros(SILERO_CONTEXT, dtype=np.float32)
+
+
 class SileroVAD:
     def __init__(self):
         import torch
@@ -53,10 +82,12 @@ class SileroVAD:
 
 
 def make_vad() -> VAD:
-    try:
-        return SileroVAD()
-    except ImportError:
-        return EnergyVAD()
+    for factory in (SileroOnnxVAD, SileroVAD):
+        try:
+            return factory()
+        except (ImportError, OSError):
+            continue
+    return EnergyVAD()
 
 
 @dataclass(frozen=True)

@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 import time
+from pathlib import Path
 
 from app.config import load_settings
 from app.eval.latency import LatencyLog
@@ -163,6 +165,9 @@ def main() -> None:
     ap.add_argument("--no-hotkeys", action="store_true")
     args = ap.parse_args()
 
+    if getattr(sys, "frozen", False):
+        # Packaged .exe: read .env and write logs next to the exe, wherever it was started from.
+        os.chdir(Path(sys.executable).parent)
     settings = load_settings()
     client = StubClient() if args.stub else make_client(settings)
     app = App(settings, client, make_speaker())

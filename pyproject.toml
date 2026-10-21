@@ -16,21 +16,27 @@ dependencies = [
     "Pillow>=10.0",
     "mss>=9.0",
     "soxr>=0.3",
+    # Runs the bundled Silero VAD model (app/audio/data/silero_vad.onnx).
+    "onnxruntime>=1.17",
     "PyAudioWPatch>=0.2.12; sys_platform == 'win32'",
     "keyboard>=0.13",
     "pyttsx3>=2.90",
 ]
 
 [project.optional-dependencies]
-# Silero VAD pulls in torch (large). Without it the app falls back to a simple energy VAD.
-vad = ["silero-vad>=5.1"]
+# PyTorch build of Silero VAD. Not needed: the ONNX model is bundled and used first.
+vad-torch = ["silero-vad>=5.1"]
 # NVDA / JAWS output through their own APIs.
 screenreader = ["accessible_output2>=0.17"]
 eval = ["jiwer>=3.0"]
 dev = ["pytest>=8.0"]
+build = ["pyinstaller>=6.0"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.audio" = ["data/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

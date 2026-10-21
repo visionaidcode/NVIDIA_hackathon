@@ -80,6 +80,26 @@ Type a question in the console window and press Enter, or use the global hotkeys
 | Ctrl+Alt+S | Status: what is being captured |
 | Ctrl+Alt+P | Pause capture and clear memory / resume |
 
+## Windows .exe
+
+Build a single-file `MeetingAssistant.exe` (about 50 MB) and a zip to share:
+
+```bash
+.venv\Scripts\python -m pip install -e ".[build]"
+```
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1
+```
+
+Output: `dist\MeetingAssistant\MeetingAssistant.exe` and `dist\MeetingAssistant-win64.zip`.
+Put a `.env` (copied from `.env.example`, with your keys) in the same folder as
+the exe, then run it. `MeetingAssistant.exe --stub` runs without keys.
+
+The exe is not code-signed. Windows SmartScreen shows a warning ("More info" →
+"Run anyway"), and on PCs with **Smart App Control** turned on Windows blocks it
+completely. On those PCs use the run-from-source steps above.
+
 ## Checks and measurements
 
 ```bash
