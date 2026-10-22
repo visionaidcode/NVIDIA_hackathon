@@ -1,4 +1,9 @@
-"""Settings from environment variables (and an optional .env file)."""
+"""Settings from environment variables and a settings file.
+
+The settings file is `.env` in the current folder if there is one (developer
+setup), otherwise `%APPDATA%\\MeetingAssistant\\settings.env`, which the settings
+window writes. Real environment variables win over both.
+"""
 
 from __future__ import annotations
 
@@ -7,13 +12,15 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, set_key
 
 PROVIDERS = ("openrouter", "nebius", "stub")
 AUDIO_FORMATS = ("input_audio", "audio_url")
 # chat: audio sent to a chat model (Omni, Qwen, Voxtral, Gemini...)
 # transcriptions: OpenAI-style /audio/transcriptions endpoint (Whisper-type models)
 STT_APIS = ("chat", "transcriptions")
+
+AUTO = "auto"
 
 
 @dataclass(frozen=True)
@@ -43,15 +50,43 @@ class Settings:
         return self.provider == "stub"
 
 
-def _env(name: str, default: str = "") -> str:
-    # Strip inline comments like "openrouter   # openrouter | nebius".
-    value = os.environ.get(name, default).split(" #", 1)[0].strip()
-    return value or default
+def user_settings_dir() -> Path:
+    base = os.environ.get("APPDATA") or str(Path.home())
+    return Path(base) / "MeetingAssistant"
 
 
-def load_settings(env_file: str | Path | None = ".env") -> Settings:
-    if env_file and Path(env_file).exists():
-        load_dotenv(env_file, override=False)
+def settings_file() -> Path:
+    """The file the app reads and the settings window writes."""
+    local = Path.cwd() / ".env"
+    return local if local.exists() else user_settings_dir() / "settings.env"
+
+
+def read_values(path: Path | None = None) -> dict[str, str]:
+    path = path or settings_file()
+    if not path.exists():
+        return {}
+    return {k: v for k, v in dotenv_values(path).items() if v is not None}
+
+
+def save_values(values: dict[str, str], path: Path | None = None) -> Path:
+    """Update keys in the settings file, keeping any other lines in it."""
+    path = path or settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(exist_ok=True)
+    for key, value in values.items():
+        set_key(str(path), key, value, quote_mode="auto")
+    return path
+
+
+def load_settings(env_file: str | Path | None = AUTO) -> Settings:
+    path = settings_file() if env_file == AUTO else (Path(env_file) if env_file else None)
+    file_values = read_values(path) if path else {}
+
+    def _env(name: str, default: str = "") -> str:
+        raw = os.environ.get(name, file_values.get(name, default)) or ""
+        # Strip inline comments like "openrouter   # openrouter | nebius".
+        value = raw.split(" #", 1)[0].strip()
+        return value or default
 
     provider = _env("LLM_PROVIDER", "stub").lower()
     if provider not in PROVIDERS:
@@ -67,6 +102,10 @@ def load_settings(env_file: str | Path | None = ".env") -> Settings:
 
     extra_raw = _env("LLM_EXTRA_BODY")
     extra_body = json.loads(extra_raw) if extra_raw else {}
+
+    latency_log = Path(_env("LATENCY_LOG", "eval/results/latency.jsonl"))
+    if path and not latency_log.is_absolute():
+        latency_log = path.parent / latency_log
 
     base_url, api_key, model = _env("LLM_BASE_URL"), _env("LLM_API_KEY"), _env("LLM_MODEL")
     settings = Settings(
@@ -87,7 +126,7 @@ def load_settings(env_file: str | Path | None = ".env") -> Settings:
         frame_max_side=int(_env("FRAME_MAX_SIDE", "1280")),
         jpeg_quality=int(_env("JPEG_QUALITY", "70")),
         max_frames_per_question=int(_env("MAX_FRAMES_PER_QUESTION", "3")),
-        latency_log=_env("LATENCY_LOG", "eval/results/latency.jsonl"),
+        latency_log=str(latency_log),
     )
     if not settings.is_stub:
         missing = [n for n, v in (("LLM_BASE_URL", settings.base_url),

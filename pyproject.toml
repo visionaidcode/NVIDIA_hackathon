@@ -21,6 +21,8 @@ dependencies = [
     "PyAudioWPatch>=0.2.12; sys_platform == 'win32'",
     "keyboard>=0.13",
     "pyttsx3>=2.90",
+    # Native Windows controls, which NVDA and JAWS read reliably.
+    "wxPython>=4.2.2",
 ]
 
 [project.optional-dependencies]

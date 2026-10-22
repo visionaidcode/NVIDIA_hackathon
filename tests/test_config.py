@@ -1,6 +1,6 @@
 import pytest
 
-from app.config import load_settings
+from app.config import load_settings, save_values
 
 ENV_NAMES = ["LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "STT_BASE_URL",
              "STT_API_KEY", "STT_MODEL", "STT_API", "STT_LANGUAGE", "AUDIO_BLOCK_FORMAT", "LLM_EXTRA_BODY"]
@@ -33,6 +33,26 @@ def test_stt_can_use_its_own_provider(env):
     assert (s.stt_base_url, s.stt_api_key, s.stt_model, s.stt_api) == (
         "https://stt.example/v1", "stt-key", "whisper", "transcriptions")
     assert s.model == "omni"
+
+
+def test_save_and_reload_settings_file(env, tmp_path):
+    for name in ("LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
+        env.delenv(name)
+    path = tmp_path / "settings.env"
+    path.write_text("# my notes\nWINDOW_SECONDS=20\n", encoding="utf-8")
+    save_values({"LLM_PROVIDER": "openrouter", "LLM_BASE_URL": "https://x/v1",
+                 "LLM_API_KEY": "secret-key", "LLM_MODEL": "omni"}, path)
+    save_values({"LLM_MODEL": "omni-2"}, path)
+    s = load_settings(path)
+    assert (s.provider, s.api_key, s.model, s.window_seconds) == ("openrouter", "secret-key", "omni-2", 20.0)
+    assert "# my notes" in path.read_text(encoding="utf-8")
+    assert s.latency_log.startswith(str(tmp_path))
+
+
+def test_environment_wins_over_file(env, tmp_path):
+    path = tmp_path / "settings.env"
+    save_values({"LLM_MODEL": "from-file"}, path)
+    assert load_settings(path).model == "omni"
 
 
 def test_rejects_unknown_stt_api(env):

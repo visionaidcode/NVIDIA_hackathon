@@ -3,14 +3,16 @@
 #   .venv\Scripts\python -m pip install -e ".[build]"
 #   powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1
 #
-# The exe reads .env from its own folder. The zip includes .env.example, never .env.
+# The exe opens a window and asks for the API key on first run (saved under
+# %APPDATA%\MeetingAssistant). A .env next to the exe is used instead if present.
+# The zip includes .env.example, never .env.
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $python = Join-Path $root ".venv\Scripts\python.exe"
 
-& $python -m PyInstaller --noconfirm --clean --onefile --console `
+& $python -m PyInstaller --noconfirm --clean --onefile --windowed `
     --name MeetingAssistant `
     --paths $root `
     --add-data "$root\app\audio\data;app\audio\data" `

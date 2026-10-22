@@ -52,11 +52,7 @@ python -m venv .venv
 .venv\Scripts\python -m pip install -e ".[dev,eval]"
 ```
 
-Optional extras: `.[vad]` for Silero VAD (installs PyTorch, large) and
-`.[screenreader]` for direct NVDA / JAWS output.
-
-Copy `.env.example` to `.env` and fill in `LLM_API_KEY` (and for Nebius, the base
-URL and Omni model ID from the Token Factory docs and Models page). Never commit `.env`.
+Optional extra: `.[screenreader]` for direct NVDA / JAWS output.
 
 ## Run
 
@@ -64,13 +60,24 @@ URL and Omni model ID from the Token Factory docs and Models page). Never commit
 .venv\Scripts\python -m app.main
 ```
 
-Try it without any API key (fake answers):
+On first run a **settings window** asks for the provider, API key and models
+(OpenRouter is pre-filled; for Nebius, paste the base URL and Omni model ID from
+the Token Factory docs and Models page). **Test connection** checks both the answer
+model and the speech model. Settings are saved in
+`%APPDATA%\MeetingAssistant\settings.env`; developers can use a `.env` in the
+project folder instead (see `.env.example`), which then takes priority. Never commit `.env`.
+
+The main window has a question box (Enter asks; empty asks "what is on screen"),
+buttons for Repeat, Stop speaking, Pause capture and Settings, and a log of every
+answer that a screen reader can review. All controls are native Windows controls
+with Alt shortcuts. Try it without any API key (fake answers):
 
 ```bash
 .venv\Scripts\python -m app.main --stub
 ```
 
-Type a question in the console window and press Enter, or use the global hotkeys:
+`--console` runs without a window (type questions in the console). The global
+hotkeys work from any app in both modes:
 
 | Keys | Action |
 |---|---|
@@ -82,7 +89,7 @@ Type a question in the console window and press Enter, or use the global hotkeys
 
 ## Windows .exe
 
-Build a single-file `MeetingAssistant.exe` (about 50 MB) and a zip to share:
+Build a single-file `MeetingAssistant.exe` (about 60 MB) and a zip to share:
 
 ```bash
 .venv\Scripts\python -m pip install -e ".[build]"
@@ -93,8 +100,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1
 ```
 
 Output: `dist\MeetingAssistant\MeetingAssistant.exe` and `dist\MeetingAssistant-win64.zip`.
-Put a `.env` (copied from `.env.example`, with your keys) in the same folder as
-the exe, then run it. `MeetingAssistant.exe --stub` runs without keys.
+Double-click the exe; the settings window opens on first run.
+`MeetingAssistant.exe --stub` runs without keys.
 
 The exe is not code-signed. Windows SmartScreen shows a warning ("More info" →
 "Run anyway"), and on PCs with **Smart App Control** turned on Windows blocks it
