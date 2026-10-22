@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from typing import Protocol
 
 SVSF_ASYNC = 1
@@ -96,6 +97,48 @@ class TeeSpeaker:
 
     def stop(self) -> None:
         self.inner.stop()
+
+
+class SelfSpeechGuard:
+    """Remembers when the app itself is talking, so loopback capture can skip its own voice.
+
+    Screen readers do not report when they finish, so the end is estimated from the text
+    length at a fairly slow rate; skipping a little meeting audio beats transcribing ourselves.
+    """
+
+    CHARS_PER_SECOND = 12.0
+    MARGIN_S = 1.0
+
+    def __init__(self, inner: Speaker, clock=time.time):
+        self.inner = inner
+        self.name = inner.name
+        self.clock = clock
+        self._spans: list[list[float]] = []  # [start, end] of each thing said, oldest first
+        self._lock = threading.Lock()
+
+    def speak(self, text: str, interrupt: bool = False) -> None:
+        with self._lock:
+            now = self.clock()
+            if interrupt:
+                self._cut(now)
+            start = max(now, self._spans[-1][1]) if self._spans else now
+            self._spans.append([start, start + len(text) / self.CHARS_PER_SECOND])
+            self._spans = [s for s in self._spans if s[1] > now - 300]
+        self.inner.speak(text, interrupt)
+
+    def stop(self) -> None:
+        with self._lock:
+            self._cut(self.clock())
+        self.inner.stop()
+
+    def _cut(self, now: float) -> None:
+        """Queued speech is dropped: nothing said ends later than now."""
+        self._spans = [[s, min(e, now)] for s, e in self._spans if s < now]
+
+    def overlaps(self, start: float, end: float) -> bool:
+        """True if [start, end] overlaps a time when the app was speaking (with a margin)."""
+        with self._lock:
+            return any(start < e + self.MARGIN_S and end > s for s, e in self._spans)
 
 
 def make_speaker(echo: bool = True) -> Speaker:

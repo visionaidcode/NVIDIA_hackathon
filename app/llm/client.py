@@ -19,6 +19,14 @@ STT_INSTRUCTION = (
     "If there is no speech, output nothing."
 )
 
+SPEAKER_INSTRUCTION = (
+    "This is a screenshot of a video meeting taken while someone was talking. "
+    "Who is speaking right now? Look for the highlighted or outlined participant tile, "
+    "a speaking or microphone indicator, or the name shown with live captions. "
+    "Reply with only that person's name as shown on screen. "
+    "If you cannot tell who is speaking, reply Unknown."
+)
+
 
 def image_block(jpeg: bytes) -> dict:
     b64 = base64.b64encode(jpeg).decode("ascii")
@@ -45,6 +53,8 @@ class ModelClient(Protocol):
                     max_tokens: int = 200) -> AsyncIterator[str]: ...
 
     async def transcribe(self, wav: bytes) -> str: ...
+
+    async def identify_speaker(self, jpeg: bytes) -> str: ...
 
 
 class OpenAICompatClient:
@@ -106,6 +116,17 @@ class OpenAICompatClient:
             raise RuntimeError(f"provider error: {error.get('message', 'no choices in response')}")
         return (resp.choices[0].message.content or "").strip()
 
+    async def identify_speaker(self, jpeg: bytes) -> str:
+        """Raw reply naming the active speaker in a meeting screenshot (see app.stt.speaker)."""
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": SPEAKER_INSTRUCTION}, image_block(jpeg)]}]
+        # Room for a reasoning model's <think> block before the name.
+        resp = await self._client.chat.completions.create(
+            model=self.model, messages=messages, temperature=0, max_tokens=400,
+            extra_body=self.extra_body or None,
+        )
+        return (resp.choices[0].message.content or "").strip() if resp.choices else ""
+
 
 class StubClient:
     """Fake responses so the app can be built and tested without cloud access."""
@@ -113,9 +134,10 @@ class StubClient:
     def __init__(self, answer: str = "The slide shows the home page with a blue Sign up button. "
                                       "He said the button will move to the top right.",
                  transcript: str = "so on the home page we are moving the sign up button",
-                 delay: float = 0.05):
+                 speaker: str = "Alex", delay: float = 0.05):
         self.answer = answer
         self.transcript = transcript
+        self.speaker = speaker
         self.delay = delay
         self.calls: list[list[dict]] = []
 
@@ -129,6 +151,10 @@ class StubClient:
     async def transcribe(self, wav: bytes) -> str:
         await asyncio.sleep(self.delay)
         return self.transcript
+
+    async def identify_speaker(self, jpeg: bytes) -> str:
+        await asyncio.sleep(self.delay)
+        return self.speaker
 
 
 def make_client(settings: Settings) -> ModelClient:

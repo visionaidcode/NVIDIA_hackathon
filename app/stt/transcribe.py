@@ -1,10 +1,12 @@
-"""Speech segment -> Omni -> transcript line in the rolling buffer."""
+"""Speech segment -> speech model -> transcript line, named from the screen, to the buffer and
+the saved meeting transcript."""
 
 from __future__ import annotations
 
 import asyncio
 import re
 import time
+from collections.abc import Awaitable, Callable
 
 from app.audio.vad import Segment
 from app.audio.wav import encode_wav
@@ -22,30 +24,43 @@ def clean_transcript(text: str) -> str:
 
 
 class Transcriber:
-    def __init__(self, client: ModelClient, buffer: RollingBuffer, log: LatencyLog | None = None):
+    def __init__(self, client: ModelClient, buffer: RollingBuffer, log: LatencyLog | None = None,
+                 name_speaker: Callable[[float, float], Awaitable[str]] | None = None,
+                 on_line: Callable[[TranscriptLine], None] | None = None):
         self.client = client
         self.buffer = buffer
         self.log = log
+        self.name_speaker = name_speaker
+        self.on_line = on_line
         self.queue: asyncio.Queue[Segment] = asyncio.Queue()
         self.last_error: Exception | None = None
 
     async def run(self) -> None:
         while True:
             seg = await self.queue.get()
-            # Skip work that would already have fallen out of the window.
-            if seg.end < time.time() - self.buffer.window:
-                continue
-            t0 = time.perf_counter()
             try:
-                text = clean_transcript(await self.client.transcribe(encode_wav(seg.audio)))
-                self.last_error = None
-            except Exception as e:  # noqa: BLE001 - one bad chunk must not stop transcription
-                self.last_error = e
-                if self.log:
-                    self.log.write("stt_error", error=type(e).__name__)
-                continue
+                await self._handle(seg)
+            finally:
+                self.queue.task_done()
+
+    async def _handle(self, seg: Segment) -> None:
+        # Every segment is transcribed, even late ones: the meeting transcript is saved.
+        t0 = time.perf_counter()
+        try:
+            text = clean_transcript(await self.client.transcribe(encode_wav(seg.audio)))
+            self.last_error = None
+        except Exception as e:  # noqa: BLE001 - one bad chunk must not stop transcription
+            self.last_error = e
             if self.log:
-                self.log.write("stt", audio_s=round(seg.duration, 2),
-                               latency_s=round(time.perf_counter() - t0, 3), empty=not text)
-            if text:
-                self.buffer.add_line(TranscriptLine(seg.start, seg.end, text))
+                self.log.write("stt_error", error=type(e).__name__)
+            return
+        if self.log:
+            self.log.write("stt", audio_s=round(seg.duration, 2),
+                           latency_s=round(time.perf_counter() - t0, 3), empty=not text)
+        if not text:
+            return
+        speaker = await self.name_speaker(seg.start, seg.end) if self.name_speaker else ""
+        line = TranscriptLine(seg.start, seg.end, text, speaker)
+        self.buffer.add_line(line)
+        if self.on_line:
+            self.on_line(line)

@@ -53,6 +53,15 @@ class ScreenCapture:
         shot = sct.grab(sct.monitors[self.monitor])
         return Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
 
+    def capture_now(self) -> None:
+        """Take one screenshot immediately, e.g. when a question is asked. Any thread."""
+        import mss
+
+        with mss.mss() as sct:
+            img = self.grab(sct)
+        jpeg, w, h = encode_frame(img, self.max_side, self.quality)
+        self.buffer.add_frame(Frame(time.time(), jpeg, w, h))
+
     def _run(self) -> None:
         import mss
 

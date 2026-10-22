@@ -10,16 +10,19 @@ from dataclasses import dataclass
 from app.eval.latency import LatencyLog
 from app.llm.client import ModelClient, image_block
 from app.memory.buffer import Frame, Snapshot
+from app.memory.transcript import UNKNOWN_SPEAKER
 from app.qa.text import SentenceSplitter, ThinkFilter, clean_for_speech
 
 MAX_SENTENCES = 2
 
 SYSTEM_PROMPT = """\
-You help a blind person follow a video meeting. You receive screenshots of the \
-shared screen from the last 30 seconds (oldest first, each with how long ago it \
-was taken), a transcript of recent speech, and the user's question.
+You help a blind person follow a video meeting. You receive a transcript of the \
+meeting with speaker names, screenshots of the screen from the last 30 seconds \
+(oldest first, the last one taken when the question was asked), and the user's question.
 Rules:
 - Use only what is in the transcript and the screenshots. Never invent numbers, names or text.
+- Say who said something when it helps. Speaker names are read from the meeting screen \
+and may be wrong; "Speaker" means the name was not visible.
 - If something is not legible or not shown, say so.
 - Label estimates as estimates.
 - Answer in at most two short sentences of plain language. No markdown, lists or emoji. \
@@ -41,17 +44,19 @@ def select_frames(frames: list[Frame], n: int) -> list[Frame]:
 
 
 def _ago(now: float, ts: float) -> str:
-    return f"{max(0, round(now - ts))} s ago"
+    seconds = max(0, round(now - ts))
+    return f"{seconds} s ago" if seconds < 120 else f"{round(seconds / 60)} min ago"
 
 
 def build_messages(snapshot: Snapshot, question: str, max_frames: int = 3) -> list[dict]:
     now = snapshot.now
     if snapshot.transcript:
-        transcript = "\n".join(f"[{_ago(now, line.end)}] {line.text}" for line in snapshot.transcript)
+        transcript = "\n".join(f"[{_ago(now, line.end)}] {line.speaker or UNKNOWN_SPEAKER}: {line.text}"
+                               for line in snapshot.transcript)
     else:
         transcript = "(no speech captured)"
 
-    content: list[dict] = [{"type": "text", "text": f"Transcript of the last 30 seconds:\n{transcript}"}]
+    content: list[dict] = [{"type": "text", "text": f"Meeting transcript:\n{transcript}"}]
     frames = select_frames(snapshot.frames, max_frames)
     if not frames:
         content.append({"type": "text", "text": "(no screenshots captured)"})

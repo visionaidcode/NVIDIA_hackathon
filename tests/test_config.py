@@ -3,7 +3,8 @@ import pytest
 from app.config import load_settings, save_values
 
 ENV_NAMES = ["LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "STT_BASE_URL",
-             "STT_API_KEY", "STT_MODEL", "STT_API", "STT_LANGUAGE", "AUDIO_BLOCK_FORMAT", "LLM_EXTRA_BODY"]
+             "STT_API_KEY", "STT_MODEL", "STT_API", "STT_LANGUAGE", "AUDIO_BLOCK_FORMAT", "LLM_EXTRA_BODY",
+             "TRANSCRIPT_DIR", "SPEAKER_NAMES"]
 
 
 @pytest.fixture
@@ -59,3 +60,12 @@ def test_rejects_unknown_stt_api(env):
     env.setenv("STT_API", "websocket")
     with pytest.raises(ValueError):
         load_settings(env_file=None)
+
+
+def test_transcript_settings(env, tmp_path):
+    s = load_settings(env_file=None)
+    assert s.transcript_dir.endswith("Meeting Assistant") and s.speaker_names
+    env.setenv("TRANSCRIPT_DIR", str(tmp_path))
+    env.setenv("SPEAKER_NAMES", "off")
+    s = load_settings(env_file=None)
+    assert (s.transcript_dir, s.speaker_names) == (str(tmp_path), False)

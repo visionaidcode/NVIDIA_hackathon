@@ -4,7 +4,8 @@
     python -m app.main --stub       # fake answers, no network
     python -m app.main --console    # no window: type questions in the console
 
-Global hotkeys work in both modes.
+Global hotkeys work in both modes. Ctrl+Alt+M starts the meeting transcript (screen and
+system audio capture, speaker names, saved to a text file); questions need it running.
 """
 
 from __future__ import annotations
@@ -21,32 +22,46 @@ from app.config import load_settings, settings_file
 from app.eval.latency import LatencyLog
 from app.input import hotkeys
 from app.llm.client import StubClient, make_client
-from app.memory.buffer import RollingBuffer
+from app.memory.buffer import RollingBuffer, Snapshot
+from app.memory.transcript import MeetingTranscript, format_line
 from app.qa.ask import answer_question
 from app.screen.capture import ScreenCapture
-from app.speech.out import make_speaker
+from app.speech.out import SelfSpeechGuard, make_speaker
+from app.stt.speaker import SpeakerNamer
 from app.stt.transcribe import Transcriber
 
 DEFAULT_QUESTION = "What is on the screen and what was just said about it?"
 
 
 class App:
+    """Capture runs only while a meeting transcript is being recorded (Ctrl+Alt+M).
+    Questions are answered from that transcript and the screen, so they need a recording."""
+
     def __init__(self, settings, client, speaker):
         self.settings = settings
         self.client = client
-        self.speaker = speaker
+        self.speaker = SelfSpeechGuard(speaker)
         self.log = LatencyLog(settings.latency_log)
         self.buffer = RollingBuffer(settings.window_seconds)
-        self.screen = ScreenCapture(self.buffer, settings.frame_interval,
-                                    settings.frame_max_side, settings.jpeg_quality)
-        self.transcriber = Transcriber(client, self.buffer, self.log)
+        self.screen = self._new_screen()
+        self.meeting = MeetingTranscript(settings.transcript_dir)
+        self.namer = SpeakerNamer(client, self.buffer) if settings.speaker_names else None
+        self.transcriber = Transcriber(client, self.buffer, self.log,
+                                       name_speaker=self.namer.name_for if self.namer else None,
+                                       on_line=self._on_line)
+        self.on_transcript = None  # optional callback for each new transcript line (the window log)
         self.audio = None
-        self.paused = False
+        self.recording = False
+        self._switching = False  # a start or stop is in progress
         self.last_answer = ""
         self._current: asyncio.Task | None = None
         self._stt_task: asyncio.Task | None = None
         self._unregister_hotkeys = None
         self.loop: asyncio.AbstractEventLoop | None = None
+
+    def _new_screen(self) -> ScreenCapture:
+        return ScreenCapture(self.buffer, self.settings.frame_interval,
+                             self.settings.frame_max_side, self.settings.jpeg_quality)
 
     # --- capture ---------------------------------------------------------
 
@@ -56,18 +71,79 @@ class App:
 
         vad = make_vad()
         def on_segment(seg):
-            if not self.paused:
-                self.loop.call_soon_threadsafe(self.transcriber.queue.put_nowait, seg)
+            # The speakers also play our own answers; never transcribe those.
+            if self.speaker.overlaps(seg.start, seg.end):
+                self.log.write("stt_skip_own_voice", audio_s=round(seg.duration, 2))
+                return
+            self.loop.call_soon_threadsafe(self.transcriber.queue.put_nowait, seg)
         self.audio = LoopbackCapture(SpeechSegmenter(vad), on_segment)
         self.audio.start()
         print(f"Audio: {self.audio.device_name}, VAD: {type(vad).__name__}")
 
+    def _on_line(self, line) -> None:
+        self.meeting.add(line)
+        if self.on_transcript:
+            self.on_transcript(line)
+
+    async def start_recording(self) -> None:
+        path = self.meeting.start()
+        self.buffer.clear()
+        self.screen = self._new_screen()
+        self.screen.start()
+        try:
+            await asyncio.to_thread(self.start_audio)
+        except Exception as e:  # noqa: BLE001
+            print(f"System audio capture unavailable: {e}")
+            self.speaker.speak("System audio capture is not available, so nothing said will be "
+                               "transcribed. Screen questions still work.")
+        self.recording = True
+        self.speaker.speak(f"Meeting transcript started. Saving to {path.name}. "
+                           f"Ask with control alt space; press control alt M to stop.", True)
+
+    async def stop_recording(self) -> None:
+        self.recording = False
+        self.screen.stop()
+        if self.audio:
+            # Stopping flushes the last speech segment into the queue.
+            await asyncio.to_thread(self.audio.stop)
+            self.audio = None
+        if not self.transcriber.queue.empty():
+            self.speaker.speak("Stopping. Finishing the last lines.", True)
+        try:
+            await asyncio.wait_for(self.transcriber.queue.join(), 60)
+        except asyncio.TimeoutError:
+            pass
+        path = self.meeting.stop()
+        self.buffer.clear()
+        if path:
+            self.speaker.speak(f"Meeting transcript stopped. {len(self.meeting.lines)} lines saved to "
+                               f"{path.name} in {path.parent}.", True)
+
+    async def _toggle_recording(self) -> None:
+        if self._switching:
+            return
+        self._switching = True
+        try:
+            await (self.stop_recording() if self.recording else self.start_recording())
+        finally:
+            self._switching = False
+
     # --- actions (thread-safe: called from the window, hotkey thread or console) ---
+
+    def toggle_recording(self) -> None:
+        if not self.loop:
+            self.speaker.speak("Still starting, please try again in a moment.", True)
+            return
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(self._toggle_recording()))
 
     def ask(self, question: str = "") -> None:
         question_end = time.perf_counter()
         if not self.loop:
             self.speaker.speak("Still starting, please ask again in a moment.", True)
+            return
+        if not self.recording:
+            self.speaker.speak("The meeting is not being transcribed. Press control alt M to start, "
+                               "then ask your question.", True)
             return
         self.loop.call_soon_threadsafe(self._start_answer, question or DEFAULT_QUESTION, question_end)
 
@@ -79,8 +155,14 @@ class App:
 
     async def _answer(self, question: str, question_end: float) -> None:
         try:
+            try:
+                await asyncio.to_thread(self.screen.capture_now)  # the screen as it is now
+            except Exception as e:  # noqa: BLE001 - fall back to the periodic screenshots
+                self.log.write("capture_error", error=type(e).__name__)
+            frames = self.buffer.snapshot()
+            snapshot = Snapshot(frames.now, frames.frames, self.meeting.recent())
             result = await answer_question(
-                self.client, self.buffer.snapshot(), question, speak=self.speaker.speak,
+                self.client, snapshot, question, speak=self.speaker.speak,
                 max_frames=self.settings.max_frames_per_question, log=self.log,
                 question_end=question_end)
             self.last_answer = result.text
@@ -97,50 +179,36 @@ class App:
         self.speaker.stop()
 
     def status_text(self) -> str:
+        if not self.recording:
+            return "Not transcribing. Press control alt M to start the meeting transcript."
         snap = self.buffer.snapshot()
-        parts = [f"{len(snap.frames)} screenshots and {len(snap.transcript)} transcript lines "
-                 f"from the last {int(self.settings.window_seconds)} seconds."]
-        if self.paused:
-            parts.append("Capture is paused.")
+        parts = [f"Transcribing the meeting: {len(self.meeting.lines)} lines saved, "
+                 f"{len(snap.frames)} screenshots from the last {int(self.settings.window_seconds)} seconds."]
+        if self.meeting.lines:
+            parts.append(f"Last speaker: {self.meeting.lines[-1].speaker or 'unknown'}.")
         if self.screen.last_error:
             parts.append("Screen capture has an error.")
         if self.audio is None:
             parts.append("System audio is not being captured.")
         if self.transcriber.last_error:
             parts.append(f"Transcription error: {type(self.transcriber.last_error).__name__}.")
+        if self.namer and self.namer.last_error:
+            parts.append(f"Speaker name error: {type(self.namer.last_error).__name__}.")
         return " ".join(parts)
 
     def status(self) -> None:
         self.speaker.speak(self.status_text(), True)
 
-    def toggle_pause(self) -> None:
-        self.paused = not self.paused
-        if self.paused:
-            self.screen.stop()
-            self.buffer.clear()
-            self.speaker.speak("Capture paused and memory cleared.", True)
-        else:
-            self.screen = ScreenCapture(self.buffer, self.settings.frame_interval,
-                                        self.settings.frame_max_side, self.settings.jpeg_quality)
-            self.screen.start()
-            self.speaker.speak("Capture resumed.", True)
-
     # --- lifecycle --------------------------------------------------------
 
     async def start(self, use_hotkeys: bool = True) -> None:
         self.loop = asyncio.get_running_loop()
-        self.screen.start()
-        try:
-            self.start_audio()
-        except Exception as e:  # noqa: BLE001
-            print(f"System audio capture unavailable: {e}")
-            self.speaker.speak("System audio capture is not available. Screen questions still work.")
         self._stt_task = asyncio.create_task(self.transcriber.run())
         if use_hotkeys:
             try:
                 self._unregister_hotkeys = hotkeys.register({
-                    "ask": self.ask, "repeat": self.repeat, "stop": self.stop_speaking,
-                    "status": self.status, "pause": self.toggle_pause,
+                    "record": self.toggle_recording, "ask": self.ask, "repeat": self.repeat,
+                    "stop": self.stop_speaking, "status": self.status,
                 })
             except Exception as e:  # noqa: BLE001
                 print(f"Hotkeys unavailable: {e}")
@@ -149,6 +217,8 @@ class App:
         if self._unregister_hotkeys:
             self._unregister_hotkeys()
             self._unregister_hotkeys = None
+        if self.recording:
+            await self.stop_recording()
         for task in (self._current, self._stt_task):
             if task and not task.done():
                 task.cancel()
@@ -156,6 +226,7 @@ class App:
         if self.audio:
             self.audio.stop()
             self.audio = None
+        self.meeting.stop()
         self.buffer.clear()
 
     def greeting(self) -> str:
@@ -165,7 +236,8 @@ class App:
     async def run_console(self, use_hotkeys: bool = True) -> None:
         await self.start(use_hotkeys)
         self.speaker.speak(f"{self.greeting()} Press {hotkeys.describe()}.")
-        print("Type a question and press Enter. Empty line asks the default question. Ctrl+C to quit.")
+        print("Type m and Enter to start or stop the meeting transcript, or type a question and press "
+              "Enter. Empty line asks the default question. Ctrl+C to quit.")
         try:
             while True:
                 line = await self.loop.run_in_executor(None, sys.stdin.readline)
@@ -174,6 +246,9 @@ class App:
                 question = line.strip()
                 if question.lower() in {"q", "quit", "exit"}:
                     break
+                if question.lower() == "m":
+                    self.toggle_recording()
+                    continue
                 self.ask(question)
         finally:
             await self.stop()
@@ -263,13 +338,14 @@ def run_gui(force_stub: bool, use_hotkeys: bool) -> None:
 
     def start(s) -> None:
         state["app"] = make_app(s, force_stub, speaker)
+        state["app"].on_transcript = lambda line: log(format_line(line))
         state["runner"] = BackgroundRunner(state["app"], use_hotkeys)
         app = state["app"]
         model = "fake answers" if isinstance(app.client, StubClient) else \
             f"answers {s.model}, speech {s.stt_model}"
         state["summary"] = f"{s.provider}: {model}"
-        speaker.speak(f"{app.greeting()} Type a question and press Enter, "
-                      f"or press control alt space from any app.")
+        speaker.speak(f"{app.greeting()} Press control alt M to start transcribing the meeting, "
+                      f"then type a question and press Enter, or press control alt space from any app.")
 
     def open_settings() -> None:
         dlg = SettingsDialog(frame)
@@ -287,13 +363,13 @@ def run_gui(force_stub: bool, use_hotkeys: bool) -> None:
 
     def get_status() -> tuple[str, bool]:
         app = state["app"]
-        return f"{state['summary']}. {app.status_text()}", app.paused
+        return f"{state['summary']}. {app.status_text()}", app.recording
 
     frame = MainWindow(
         on_ask=lambda q: state["app"].ask(q),
         on_repeat=lambda: state["app"].repeat(),
         on_stop=lambda: state["app"].stop_speaking(),
-        on_pause=lambda: state["app"].toggle_pause(),
+        on_record=lambda: state["app"].toggle_recording(),
         on_settings=open_settings,
         get_status=lambda: get_status() if "app" in state else ("Starting...", False),
     )

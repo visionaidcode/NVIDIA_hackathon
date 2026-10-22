@@ -2,22 +2,29 @@
 
 A Windows desktop app for blind and low-vision people in video meetings. When a
 colleague shares their screen and says "look at this", press a hotkey (or type a
-question) and hear a short spoken answer about what was shown and said in the last
-30 seconds. Works next to any meeting app (Zoom, Teams, Google Meet), because it
+question) and hear a short spoken answer about what is shown and what was said, and by
+whom. Works next to any meeting app (Zoom, Teams, Google Meet), because it
 captures the screen and the system audio rather than plugging into the meeting.
 
 Built for the Nebius x NVIDIA Global AI Hackathon (track: Best Apps and Agents).
 
 ## How it works
 
-1. Every ~2 s the app takes a screenshot, downscales it and keeps it in memory.
-   A screen that hasn't changed is not stored twice.
-2. System audio (what your speakers play) is captured through WASAPI loopback.
+1. Press **Ctrl+Alt+M** to start the meeting transcript. Nothing is captured before that.
+2. Every ~2 s the app takes a screenshot, downscales it and keeps the last 30 seconds
+   in memory. A screen that hasn't changed is not stored twice.
+3. System audio (what your speakers play) is captured through WASAPI loopback.
    Voice-activity detection drops silence and cuts speech at pauses; each segment
    is transcribed while the meeting goes on, by a separate speech-to-text model.
-3. Only the last 30 seconds of screenshots and transcript are kept, in memory.
-4. When you ask, up to 3 screenshots, the transcript and your question go to
-   Nemotron 3 Nano Omni. The answer (at most two short sentences) is spoken through
+4. The speaker's name is read from the meeting screen: the screenshot taken while
+   they spoke goes to the answer model, which reads the highlighted tile, speaking
+   indicator or caption name (Teams, Zoom, Meet). If no name is visible the line says
+   "Speaker". Each line is saved at once to
+   `Documents\Meeting Assistant\Meeting <date> <time>.txt`, e.g.
+   `[10:41:05] Priya: the button moves to the top right`.
+5. Questions work only while the transcript is running. When you ask, a fresh
+   screenshot is taken, and up to 3 screenshots, the named transcript and your
+   question go to Nemotron 3 Nano Omni. The answer (at most two short sentences) is spoken through
    NVDA or JAWS if one is running, otherwise the Windows voice. The first sentence
    is spoken as soon as it arrives.
 
@@ -27,6 +34,7 @@ Built for the Nebius x NVIDIA Global AI Hackathon (track: Best Apps and Agents).
 |---|---|---|
 | Answer from screenshots + transcript + question | Nemotron 3 Nano Omni | Nebius Token Factory |
 | Transcribe meeting audio segments | Voxtral Small 24B (configurable) | OpenRouter |
+| Read the active speaker's name from a screenshot | Nemotron 3 Nano Omni (the answer model) | Nebius Token Factory |
 | Silence skipping | Silero VAD (or energy fallback) | local |
 | Speech output | NVDA / JAWS / Windows SAPI | local |
 
@@ -68,24 +76,30 @@ model and the speech model. Settings are saved in
 project folder instead (see `.env.example`), which then takes priority. Never commit `.env`.
 
 The main window has a question box (Enter asks; empty asks "what is on screen"),
-buttons for Repeat, Stop speaking, Pause capture and Settings, and a log of every
-answer that a screen reader can review. All controls are native Windows controls
+buttons for Start/Stop meeting transcript, Ask, Repeat, Stop speaking and Settings,
+and a log of every answer and transcript line that a screen reader can review. All controls are native Windows controls
 with Alt shortcuts. Try it without any API key (fake answers):
 
 ```bash
 .venv\Scripts\python -m app.main --stub
 ```
 
-`--console` runs without a window (type questions in the console). The global
-hotkeys work from any app in both modes:
+`--console` runs without a window (type `m` to start or stop the transcript, or a
+question). The global hotkeys work from any app in both modes:
 
 | Keys | Action |
 |---|---|
-| Ctrl+Alt+Space | Ask "what is on screen and what was just said?" |
+| Ctrl+Alt+M | Start / stop the meeting transcript (saved with speaker names) |
+| Ctrl+Alt+Space | Ask "what is on screen and what was just said?" (transcript must be running) |
 | Ctrl+Alt+R | Repeat the last answer |
 | Ctrl+Alt+X | Stop speaking |
-| Ctrl+Alt+S | Status: what is being captured |
-| Ctrl+Alt+P | Pause capture and clear memory / resume |
+| Ctrl+Alt+S | Status: transcript lines saved, last speaker, errors |
+
+Window shortcuts: Alt+M start/stop transcript, Alt+Q question box, Alt+A ask,
+Alt+R repeat, Alt+T stop speaking, Alt+G settings, Alt+L log.
+
+Settings for this (in `settings.env` or `.env`): `TRANSCRIPT_DIR` changes the folder,
+`SPEAKER_NAMES=off` skips the name lookup (one image call each time the screen changes).
 
 ## Windows .exe
 
@@ -148,9 +162,12 @@ Answer latency for every question is logged to `eval/results/latency.jsonl`
 
 - Screenshots and meeting audio are sent to the model provider (Nebius Token Factory,
   or OpenRouter during development) to be transcribed and answered.
-- Only the last 30 seconds are kept, in memory. Nothing is written to disk except
-  the timing log, which has no audio, images or text.
-- Ctrl+Alt+P pauses capture and clears memory.
+- Nothing is captured until you press Ctrl+Alt+M, and capture stops when you press
+  it again.
+- The meeting transcript (text with speaker names) is saved in
+  `Documents\Meeting Assistant`. Screenshots and audio are never saved: only the last
+  30 seconds of screenshots are kept, in memory. The timing log has no audio,
+  images or text.
 - You must have the consent of the other participants to capture meeting audio.
   Follow your organisation's rules and local law.
 

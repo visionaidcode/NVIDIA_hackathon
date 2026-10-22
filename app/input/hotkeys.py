@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 DEFAULT_HOTKEYS = {
+    "record": "ctrl+alt+m",      # start / stop the meeting transcript
     "ask": "ctrl+alt+space",     # "what is on screen and what was just said?"
     "repeat": "ctrl+alt+r",      # repeat the last answer
     "stop": "ctrl+alt+x",        # stop speaking
     "status": "ctrl+alt+s",      # what is captured right now
-    "pause": "ctrl+alt+p",       # pause / resume capture
 }
 
 

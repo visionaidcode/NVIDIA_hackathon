@@ -1,4 +1,5 @@
-"""Rolling in-memory window of screen frames and transcript lines. Nothing touches disk."""
+"""Rolling in-memory window of screen frames and transcript lines. Nothing here touches disk;
+the saved meeting transcript is app/memory/transcript.py."""
 
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ class TranscriptLine:
     start: float
     end: float
     text: str
+    speaker: str = ""  # name read from the meeting screen; empty if not known
 
 
 @dataclass(frozen=True)

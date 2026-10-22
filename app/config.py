@@ -44,6 +44,10 @@ class Settings:
     jpeg_quality: int = 70
     max_frames_per_question: int = 3
     latency_log: str = "eval/results/latency.jsonl"
+    # Meeting transcripts (Ctrl+Alt+M) are saved here; empty means Documents\Meeting Assistant.
+    transcript_dir: str = ""
+    # Read the active speaker's name from the meeting screen for each transcript line.
+    speaker_names: bool = True
 
     @property
     def is_stub(self) -> bool:
@@ -53,6 +57,21 @@ class Settings:
 def user_settings_dir() -> Path:
     base = os.environ.get("APPDATA") or str(Path.home())
     return Path(base) / "MeetingAssistant"
+
+
+def documents_dir() -> Path:
+    """The user's Documents folder, which may be redirected (e.g. to OneDrive)."""
+    if os.name == "nt":
+        import ctypes
+
+        buf = ctypes.create_unicode_buffer(260)
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:  # CSIDL_PERSONAL
+            return Path(buf.value)
+    return Path.home() / "Documents"
+
+
+def default_transcript_dir() -> Path:
+    return documents_dir() / "Meeting Assistant"
 
 
 def settings_file() -> Path:
@@ -127,6 +146,8 @@ def load_settings(env_file: str | Path | None = AUTO) -> Settings:
         jpeg_quality=int(_env("JPEG_QUALITY", "70")),
         max_frames_per_question=int(_env("MAX_FRAMES_PER_QUESTION", "3")),
         latency_log=str(latency_log),
+        transcript_dir=_env("TRANSCRIPT_DIR") or str(default_transcript_dir()),
+        speaker_names=_env("SPEAKER_NAMES", "on").lower() not in {"off", "0", "false", "no"},
     )
     if not settings.is_stub:
         missing = [n for n, v in (("LLM_BASE_URL", settings.base_url),

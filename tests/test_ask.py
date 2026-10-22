@@ -22,7 +22,7 @@ def test_build_messages_has_rules_transcript_images_and_question():
     msgs = build_messages(snap, "What is shown?", max_frames=3)
     assert "Never invent" in msgs[0]["content"]
     content = msgs[1]["content"]
-    assert "[5 s ago] look at the home page" in content[0]["text"]
+    assert "[5 s ago] Speaker: look at the home page" in content[0]["text"]
     assert sum(1 for c in content if c["type"] == "image_url") == 2
     assert content[-1]["text"] == "Question: What is shown?"
 
