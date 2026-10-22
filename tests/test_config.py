@@ -69,3 +69,14 @@ def test_transcript_settings(env, tmp_path):
     env.setenv("SPEAKER_NAMES", "off")
     s = load_settings(env_file=None)
     assert (s.transcript_dir, s.speaker_names) == (str(tmp_path), False)
+
+
+def test_nebius_preset_turns_thinking_off(env):
+    import json
+
+    from app.ui.settings_dialog import PRESETS
+
+    env.setenv("LLM_EXTRA_BODY", PRESETS["nebius"]["extra_body"])
+    s = load_settings(env_file=None)
+    assert s.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert json.loads(PRESETS["nebius"]["extra_body"]) == s.extra_body

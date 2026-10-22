@@ -24,26 +24,27 @@ Built for the Nebius x NVIDIA Global AI Hackathon (track: Best Apps and Agents).
    `[10:41:05] Priya: the button moves to the top right`.
 5. Questions work only while the transcript is running. When you ask, a fresh
    screenshot is taken, and up to 3 screenshots, the named transcript and your
-   question go to Nemotron 3 Nano Omni. The answer (at most two short sentences) is spoken through
-   NVDA or JAWS if one is running, otherwise the Windows voice. The first sentence
+   question go to Nemotron 3.5 Super VL on Nebius Token Factory. The answer (at most
+   two short sentences) is spoken through NVDA or JAWS if one is running, otherwise the Windows voice. The first sentence
    is spoken as soon as it arrives.
 
 ## Where NVIDIA Nemotron and Nebius Token Factory are used
 
 | Job | Model | Where |
 |---|---|---|
-| Answer from screenshots + transcript + question | Nemotron 3 Nano Omni | Nebius Token Factory |
-| Transcribe meeting audio segments | Voxtral Small 24B (configurable) | OpenRouter |
-| Read the active speaker's name from a screenshot | Nemotron 3 Nano Omni (the answer model) | Nebius Token Factory |
+| Answer from screenshots + transcript + question | Nemotron 3.5 Super VL | Nebius Token Factory |
+| Transcribe meeting audio segments | Whisper large-v3 turbo (configurable) | Groq |
+| Read the active speaker's name from a screenshot | Nemotron 3.5 Super VL (the answer model) | Nebius Token Factory |
 | Silence skipping | Silero VAD (or energy fallback) | local |
 | Speech output | NVDA / JAWS / Windows SAPI | local |
 
-During development Nemotron is called through OpenRouter. The provider is config
-only (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`); both are OpenAI-compatible. The
-submitted build calls Nebius Token Factory for the screen answers.
+The provider is config only (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`); Nebius
+Token Factory and OpenRouter are both OpenAI-compatible. Measured with Nebius:
+answers start in about 1.4 s, speaker names take about 2 s.
 
 Speech-to-text has its own settings (`STT_BASE_URL`, `STT_API_KEY`, `STT_MODEL`,
-`STT_API`), because OpenRouter's free Nemotron Omni endpoint drops audio input.
+`STT_API`), because Nebius Token Factory does not accept audio. Groq's
+`whisper-large-v3-turbo` transcribes a sentence in 0.5 to 0.8 s.
 `STT_API=chat` sends audio to a chat model (Voxtral, Qwen Omni, Gemini, GPT Audio);
 `STT_API=transcriptions` uses an OpenAI-style `/audio/transcriptions` endpoint for
 Whisper-type models. Compare models with `scripts/stt_compare.py`.
@@ -69,8 +70,8 @@ Optional extra: `.[screenreader]` for direct NVDA / JAWS output.
 ```
 
 On first run a **settings window** asks for the provider, API key and models
-(OpenRouter is pre-filled; for Nebius, paste the base URL and Omni model ID from
-the Token Factory docs and Models page). **Test connection** checks both the answer
+(Nebius Token Factory and Groq Whisper are pre-filled; paste a Nebius key for answers
+and a Groq key, from console.groq.com/keys, for speech). **Test connection** checks both the answer
 model and the speech model. Settings are saved in
 `%APPDATA%\MeetingAssistant\settings.env`; developers can use a `.env` in the
 project folder instead (see `.env.example`), which then takes priority. Never commit `.env`.
@@ -160,8 +161,8 @@ Answer latency for every question is logged to `eval/results/latency.jsonl`
 
 ## Privacy and consent
 
-- Screenshots and meeting audio are sent to the model provider (Nebius Token Factory,
-  or OpenRouter during development) to be transcribed and answered.
+- Screenshots are sent to Nebius Token Factory and meeting audio to Groq, to be
+  answered and transcribed.
 - Nothing is captured until you press Ctrl+Alt+M, and capture stops when you press
   it again.
 - The meeting transcript (text with speaker names) is saved in

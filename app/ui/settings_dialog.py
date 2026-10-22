@@ -18,22 +18,25 @@ from app.audio.wav import encode_wav
 from app.config import load_settings, read_values, save_values, settings_file
 
 PROVIDER_CHOICES = [
-    ("openrouter", "OpenRouter"),
     ("nebius", "Nebius Token Factory"),
+    ("openrouter", "OpenRouter"),
     ("stub", "Test mode (no key, fake answers)"),
 ]
 PRESETS = {
     "openrouter": {"url": "https://openrouter.ai/api/v1",
                    "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"},
-    # Copy the Token Factory base URL and Omni model ID from its docs and Models page.
-    "nebius": {"url": "", "model": ""},
+    # Nebius Token Factory takes images but not audio, so speech goes to Groq Whisper below.
+    # Thinking off: on real screenshots the model otherwise spends the whole answer budget reasoning.
+    "nebius": {"url": "https://api.tokenfactory.nebius.com/v1", "model": "nvidia/Nemotron-3.5-Super-VL",
+               "extra_body": '{"chat_template_kwargs": {"enable_thinking": false}}'},
 }
 STT_API_CHOICES = [
     ("chat", "Chat model with audio input (Voxtral, Qwen Omni, Gemini)"),
     ("transcriptions", "Transcriptions endpoint (Whisper style)"),
 ]
-DEFAULT_STT_MODEL = "mistralai/voxtral-small-24b-2507"
-DEFAULT_STT_URL = "https://openrouter.ai/api/v1"
+DEFAULT_STT_MODEL = "whisper-large-v3-turbo"
+DEFAULT_STT_URL = "https://api.groq.com/openai/v1"
+DEFAULT_STT_API = "transcriptions"
 
 
 async def check_connection(settings) -> list[str]:
@@ -165,20 +168,21 @@ class SettingsDialog(wx.Dialog):
 
     def _load(self) -> None:
         v = self.values
-        provider = (v.get("LLM_PROVIDER") or "openrouter").split(" #")[0].strip().lower()
+        provider = (v.get("LLM_PROVIDER") or "nebius").split(" #")[0].strip().lower()
         keys = [k for k, _ in PROVIDER_CHOICES]
         self.provider.SetSelection(keys.index(provider) if provider in keys else 0)
         preset = PRESETS.get(self._provider(), {})
         self.base_url.SetValue(v.get("LLM_BASE_URL") or preset.get("url", ""))
         self.key_hidden.SetValue(v.get("LLM_API_KEY", ""))
         self.model.SetValue(v.get("LLM_MODEL") or preset.get("model", ""))
-        same = not v.get("STT_BASE_URL") and not v.get("STT_API_KEY")
+        # First run: speech has its own provider (Groq), since Nebius does not take audio.
+        same = bool(v) and not v.get("STT_BASE_URL") and not v.get("STT_API_KEY")
         self.stt_same.SetValue(same)
         self.stt_url.SetValue(v.get("STT_BASE_URL") or DEFAULT_STT_URL)
         self.stt_key_hidden.SetValue(v.get("STT_API_KEY", ""))
         self.stt_model.SetValue(v.get("STT_MODEL") or DEFAULT_STT_MODEL)
         stt_keys = [k for k, _ in STT_API_CHOICES]
-        stt_api = v.get("STT_API", "chat")
+        stt_api = v.get("STT_API", DEFAULT_STT_API)
         self.stt_api.SetSelection(stt_keys.index(stt_api) if stt_api in stt_keys else 0)
         self.stt_language.SetValue(v.get("STT_LANGUAGE", ""))
         self._sync_key_visibility()
@@ -226,7 +230,15 @@ class SettingsDialog(wx.Dialog):
             "STT_MODEL": self.stt_model.GetValue().strip(),
             "STT_API": STT_API_CHOICES[max(0, self.stt_api.GetSelection())][0],
             "STT_LANGUAGE": self.stt_language.GetValue().strip(),
+            "LLM_EXTRA_BODY": self._extra_body(),
         }
+
+    def _extra_body(self) -> str:
+        """Keep a hand-set LLM_EXTRA_BODY; otherwise use the provider's (thinking off on Nebius)."""
+        current = self.values.get("LLM_EXTRA_BODY", "")
+        if current and current not in {p.get("extra_body", "") for p in PRESETS.values()}:
+            return current
+        return PRESETS.get(self._provider(), {}).get("extra_body", "")
 
     def _missing(self, values: dict[str, str]) -> tuple[str, wx.Window] | None:
         if values["LLM_PROVIDER"] == "stub":
