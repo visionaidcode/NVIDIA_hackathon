@@ -45,7 +45,7 @@ class ThinkFilter:
         return rest
 
 
-_SENTENCE_END = re.compile(r"[.!?](?=\s)")
+_SENTENCE_END = re.compile(r"[.!?।](?=\s)")  # । = "।", the Hindi full stop
 
 
 class SentenceSplitter:

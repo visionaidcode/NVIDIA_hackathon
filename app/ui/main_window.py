@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 import wx
 
+from app.config import APP_NAME, APP_VERSION
 from app.input import hotkeys
 
 
@@ -16,7 +17,7 @@ class MainWindow(wx.Frame):
     def __init__(self, on_ask: Callable[[str], None], on_repeat: Callable[[], None],
                  on_stop: Callable[[], None], on_record: Callable[[], None],
                  on_settings: Callable[[], None], get_status: Callable[[], tuple[str, bool]]):
-        super().__init__(None, title="Meeting Screen Assistant", size=(760, 560))
+        super().__init__(None, title=f"{APP_NAME} {APP_VERSION}", size=(760, 560))
         self.get_status = get_status
         panel = wx.Panel(self)
         root = wx.BoxSizer(wx.VERTICAL)

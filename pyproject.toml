@@ -3,14 +3,16 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "meeting-screen-assistant"
-version = "0.1.0"
+name = "saarathi"
+version = "1.0.0"
 description = "Ask what was just shown and said in a video meeting. Answers are spoken aloud. Built for blind and low-vision users."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "openai>=1.40",
+    # Sarvam AI speech-to-text (STT_API=sarvam); newer openai releases no longer bring it.
+    "httpx>=0.27",
     "python-dotenv>=1.0",
     "numpy>=1.26",
     "Pillow>=10.0",
@@ -21,6 +23,8 @@ dependencies = [
     "PyAudioWPatch>=0.2.12; sys_platform == 'win32'",
     "keyboard>=0.13",
     "pyttsx3>=2.90",
+    # Offline human-sounding answer voices (ANSWER_VOICE=human); voice files go in VOICE_DIR.
+    "piper-tts>=1.3",
     # Native Windows controls, which NVDA and JAWS read reliably.
     "wxPython>=4.2.2",
 ]
@@ -32,7 +36,7 @@ vad-torch = ["silero-vad>=5.1"]
 screenreader = ["accessible_output2>=0.17"]
 eval = ["jiwer>=3.0"]
 dev = ["pytest>=8.0"]
-build = ["pyinstaller>=6.0"]
+build = ["nuitka>=2.0", "ordered-set", "zstandard"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

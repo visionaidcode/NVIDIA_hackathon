@@ -15,7 +15,7 @@ import numpy as np
 import wx
 
 from app.audio.wav import encode_wav
-from app.config import load_settings, read_values, save_values, settings_file
+from app.config import DEFAULT_KEYTERMS, load_settings, read_values, save_values, settings_file
 
 PROVIDER_CHOICES = [
     ("nebius", "Nebius Token Factory"),
@@ -25,7 +25,7 @@ PROVIDER_CHOICES = [
 PRESETS = {
     "openrouter": {"url": "https://openrouter.ai/api/v1",
                    "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"},
-    # Nebius Token Factory takes images but not audio, so speech goes to Groq Whisper below.
+    # Nebius Token Factory takes images but not audio, so speech goes to Sarvam AI below.
     # Thinking off: on real screenshots the model otherwise spends the whole answer budget reasoning.
     "nebius": {"url": "https://api.tokenfactory.nebius.com/v1", "model": "nvidia/Nemotron-3.5-Super-VL",
                "extra_body": '{"chat_template_kwargs": {"enable_thinking": false}}'},
@@ -33,10 +33,15 @@ PRESETS = {
 STT_API_CHOICES = [
     ("chat", "Chat model with audio input (Voxtral, Qwen Omni, Gemini)"),
     ("transcriptions", "Transcriptions endpoint (Whisper style)"),
+    ("sarvam", "Sarvam AI speech to text (saaras)"),
 ]
-DEFAULT_STT_MODEL = "whisper-large-v3-turbo"
-DEFAULT_STT_URL = "https://api.groq.com/openai/v1"
-DEFAULT_STT_API = "transcriptions"
+DEFAULT_STT_MODEL = "saaras:v4"
+DEFAULT_STT_URL = "https://api.sarvam.ai"
+DEFAULT_STT_API = "sarvam"
+ANSWER_VOICE_CHOICES = [
+    ("human", "Human voice (offline Piper voices, English, Tamil, Hindi...)"),
+    ("screenreader", "Screen reader (NVDA or JAWS), else the Windows voice"),
+]
 
 
 async def check_connection(settings) -> list[str]:
@@ -64,7 +69,7 @@ async def check_connection(settings) -> list[str]:
 
 class SettingsDialog(wx.Dialog):
     def __init__(self, parent=None, first_run: bool = False, error: str = ""):
-        super().__init__(parent, title="Meeting Screen Assistant settings",
+        super().__init__(parent, title="Saarathi settings",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.values = read_values()
         self._building = True
@@ -128,7 +133,15 @@ class SettingsDialog(wx.Dialog):
         self.stt_model = row("Speech m&odel ID:", lambda: wx.TextCtrl(self))
         self.stt_api = row("Speech &API type:", lambda: wx.Choice(
             self, choices=[label for _, label in STT_API_CHOICES]))
-        self.stt_language = row("Speech &language code (optional, e.g. en):", lambda: wx.TextCtrl(self))
+        self.stt_language = row("Speech &language code (optional, e.g. ta-IN):", lambda: wx.TextCtrl(self))
+        self.stt_keyterms = row("Speech key &words, comma separated (names, products):",
+                                lambda: wx.TextCtrl(self))
+
+        # --- answer voice -------------------------------------------------
+        grid.Add(wx.StaticText(self, label="Spoken answers"), 0, wx.TOP, 10)
+        grid.AddSpacer(0)
+        self.answer_voice = row("Answer voi&ce:", lambda: wx.Choice(
+            self, choices=[label for _, label in ANSWER_VOICE_CHOICES]))
 
         root.Add(grid, 1, wx.ALL | wx.EXPAND, 10)
 
@@ -175,7 +188,7 @@ class SettingsDialog(wx.Dialog):
         self.base_url.SetValue(v.get("LLM_BASE_URL") or preset.get("url", ""))
         self.key_hidden.SetValue(v.get("LLM_API_KEY", ""))
         self.model.SetValue(v.get("LLM_MODEL") or preset.get("model", ""))
-        # First run: speech has its own provider (Groq), since Nebius does not take audio.
+        # First run: speech has its own provider (Sarvam AI), since Nebius does not take audio.
         same = bool(v) and not v.get("STT_BASE_URL") and not v.get("STT_API_KEY")
         self.stt_same.SetValue(same)
         self.stt_url.SetValue(v.get("STT_BASE_URL") or DEFAULT_STT_URL)
@@ -185,6 +198,10 @@ class SettingsDialog(wx.Dialog):
         stt_api = v.get("STT_API", DEFAULT_STT_API)
         self.stt_api.SetSelection(stt_keys.index(stt_api) if stt_api in stt_keys else 0)
         self.stt_language.SetValue(v.get("STT_LANGUAGE", ""))
+        self.stt_keyterms.SetValue(v.get("STT_KEYTERMS") or DEFAULT_KEYTERMS)
+        voice_keys = [k for k, _ in ANSWER_VOICE_CHOICES]
+        voice = (v.get("ANSWER_VOICE") or "human").lower()
+        self.answer_voice.SetSelection(voice_keys.index(voice) if voice in voice_keys else 0)
         self._sync_key_visibility()
 
     def _sync_key_visibility(self) -> None:
@@ -202,7 +219,8 @@ class SettingsDialog(wx.Dialog):
         real = self._provider() != "stub"
         same = self.stt_same.IsChecked()
         for c in (self.base_url, self.key_hidden, self.key_shown, self.model, self.show_key,
-                  self.stt_same, self.stt_model, self.stt_api, self.stt_language, self.test_btn):
+                  self.stt_same, self.stt_model, self.stt_api, self.stt_language, self.stt_keyterms,
+                  self.test_btn):
             c.Enable(real)
         for c in (self.stt_url, self.stt_key_hidden, self.stt_key_shown):
             c.Enable(real and not same)
@@ -230,7 +248,9 @@ class SettingsDialog(wx.Dialog):
             "STT_MODEL": self.stt_model.GetValue().strip(),
             "STT_API": STT_API_CHOICES[max(0, self.stt_api.GetSelection())][0],
             "STT_LANGUAGE": self.stt_language.GetValue().strip(),
+            "STT_KEYTERMS": self.stt_keyterms.GetValue().strip() or "none",
             "LLM_EXTRA_BODY": self._extra_body(),
+            "ANSWER_VOICE": ANSWER_VOICE_CHOICES[max(0, self.answer_voice.GetSelection())][0],
         }
 
     def _extra_body(self) -> str:

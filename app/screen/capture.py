@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 
 from app.memory.buffer import Frame, RollingBuffer
+from app.memory.history import ScreenHistory
 
 # Mean absolute difference (0-255) of a small grayscale thumbnail below which two
 # screenshots count as "the same screen" (cursor blink, clock tick).
@@ -39,8 +40,9 @@ class ScreenCapture:
     """
 
     def __init__(self, buffer: RollingBuffer, interval: float = 2.0, max_side: int = 1280,
-                 quality: int = 70, monitor: int = 1):
+                 quality: int = 70, monitor: int = 1, history: ScreenHistory | None = None):
         self.buffer = buffer
+        self.history = history  # every different screen of the whole recording, for questions after it
         self.interval = interval
         self.max_side = max_side
         self.quality = quality
@@ -75,9 +77,13 @@ class ScreenCapture:
                     now = time.time()
                     if same_screen(last_fp, fp):
                         self.buffer.add_frame(Frame(now, b"", 0, 0), unchanged=True)
+                        if self.history is not None:
+                            self.history.add(now, b"", 0, 0, unchanged=True)
                     else:
                         jpeg, w, h = encode_frame(img, self.max_side, self.quality)
                         self.buffer.add_frame(Frame(now, jpeg, w, h))
+                        if self.history is not None:
+                            self.history.add(now, jpeg, w, h)
                         last_fp = fp
                     self.last_error = None
                 except Exception as e:  # noqa: BLE001 - keep capturing after transient errors

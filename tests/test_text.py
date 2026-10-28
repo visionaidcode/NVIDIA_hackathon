@@ -27,3 +27,18 @@ def test_sentence_splitter_streams_sentences():
 
 def test_clean_for_speech_strips_markdown():
     assert clean_for_speech("- **Revenue** is `up`") == "Revenue is up"
+
+
+def test_hindi_full_stop_ends_a_sentence():
+    from app.qa.text import SentenceSplitter
+
+    s = SentenceSplitter()
+    assert s.feed("आज हम लूप सीख रहे हैं। रेंज पांच") == ["आज हम लूप सीख रहे हैं।"]
+    assert s.flush() == ["रेंज पांच"]
+
+
+def test_both_prompts_answer_in_the_meeting_language():
+    from app.qa.ask import SYSTEM_PROMPT
+    from app.qa.review import REVIEW_PROMPT
+
+    assert all("main language spoken in the meeting" in p for p in (SYSTEM_PROMPT, REVIEW_PROMPT))

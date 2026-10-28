@@ -1,10 +1,12 @@
-"""Speech output: the running screen reader (NVDA, JAWS) if there is one, else Windows SAPI."""
+"""Speech output: offline human voices (Piper) if chosen, else the running screen reader
+(NVDA, JAWS) if there is one, else Windows SAPI."""
 
 from __future__ import annotations
 
 import queue
 import threading
 import time
+from pathlib import Path
 from typing import Protocol
 
 SVSF_ASYNC = 1
@@ -74,6 +76,129 @@ class SapiSpeaker:
         self._queue.put(("", SVSF_ASYNC | SVSF_PURGE_BEFORE_SPEAK))
 
 
+# Unicode blocks of Indian scripts -> language code of the Piper voice that reads them.
+# Anything else (Latin letters) is read by the English voice.
+_SCRIPTS = [(0x0900, 0x097F, "hi"), (0x0980, 0x09FF, "bn"), (0x0A80, 0x0AFF, "gu"),
+            (0x0B80, 0x0BFF, "ta"), (0x0C00, 0x0C7F, "te"), (0x0C80, 0x0CFF, "kn"),
+            (0x0D00, 0x0D7F, "ml")]
+
+
+def _script_lang(ch: str) -> str | None:
+    """Language of one character, or None for spaces, digits and punctuation."""
+    code = ord(ch)
+    for lo, hi, lang in _SCRIPTS:
+        if lo <= code <= hi:
+            return lang
+    return "en" if ch.isalpha() else None
+
+
+def split_by_language(text: str) -> list[tuple[str, str]]:
+    """Cut text into (language, part) runs by script, so "Ravi said வணக்கம்" is read by
+    two voices. Spaces, digits and punctuation stay with the run they are in."""
+    runs: list[list[str]] = []
+    for ch in text:
+        lang = _script_lang(ch)
+        if runs and (lang is None or lang == runs[-1][0]):
+            runs[-1][1] += ch
+        elif lang is None:
+            runs.append(["en", ch])
+        else:
+            runs.append([lang, ch])
+    return [(lang, part.strip()) for lang, part in runs if part.strip()]
+
+
+class PiperSpeaker:
+    """Human-sounding offline voices (Piper, no API). One voice file per language; each part of
+    the text goes to the voice for its script, so one answer can mix English and Tamil.
+
+    Voices are loaded on a background thread (about 4 s each); speech waits only for the
+    voice it needs. Interrupt and stop take effect within about a tenth of a second.
+    """
+
+    name = "Human voice"
+    BLOCK_S = 0.1
+
+    def __init__(self, voice_dir: str | Path):
+        files = sorted(Path(voice_dir).glob("*.onnx"))
+        self._files: dict[str, Path] = {}
+        for f in files:
+            if Path(f"{f}.json").exists():
+                self._files.setdefault(f.name[:2].lower(), f)  # en_US-lessac-medium.onnx -> en
+        if not self._files:
+            raise RuntimeError(f"no Piper voices in {voice_dir}")
+        self.default = "en" if "en" in self._files else next(iter(self._files))
+        self._voices: dict[str, object] = {}
+        self._loaded = {lang: threading.Event() for lang in self._files}
+        self._queue: queue.Queue[tuple[str, int]] = queue.Queue()
+        self._gen = 0  # bumped by interrupt/stop; older queued speech is dropped
+        self._lock = threading.Lock()
+        threading.Thread(target=self._load_all, name="piper-load", daemon=True).start()
+        threading.Thread(target=self._run, name="piper", daemon=True).start()
+
+    def _load(self, lang: str) -> None:
+        from piper import PiperVoice
+
+        try:
+            self._voices[lang] = PiperVoice.load(self._files[lang])
+        except Exception as e:  # noqa: BLE001 - a broken voice falls back to the default one
+            print(f"Piper voice {self._files[lang].name} failed to load: {e}")
+        self._loaded[lang].set()
+
+    def _load_all(self) -> None:
+        # The default voice first, so the first words come quickly; then the rest side by side.
+        self._load(self.default)
+        for lang in self._files:
+            if lang != self.default:
+                threading.Thread(target=self._load, args=(lang,), name=f"piper-load-{lang}",
+                                 daemon=True).start()
+
+    def _voice(self, lang: str):
+        if lang not in self._files:
+            lang = self.default
+        self._loaded[lang].wait(60)
+        return self._voices.get(lang) or self._voices.get(self.default)
+
+    def speak(self, text: str, interrupt: bool = False) -> None:
+        with self._lock:
+            if interrupt:
+                self._gen += 1
+            self._queue.put((text, self._gen))
+
+    def stop(self) -> None:
+        with self._lock:
+            self._gen += 1
+
+    def _run(self) -> None:
+        import pyaudiowpatch as pyaudio
+
+        pa = pyaudio.PyAudio()
+        streams: dict[int, object] = {}
+        while True:
+            text, gen = self._queue.get()
+            for lang, part in split_by_language(text):
+                if gen != self._gen:
+                    break
+                voice = self._voice(lang)
+                if voice is None:
+                    break
+                try:
+                    for chunk in voice.synthesize(part):
+                        if gen != self._gen:
+                            break
+                        rate = chunk.sample_rate
+                        if rate not in streams:
+                            streams[rate] = pa.open(format=pyaudio.paInt16, channels=1, rate=rate,
+                                                    output=True)
+                        data = chunk.audio_int16_bytes
+                        step = int(rate * self.BLOCK_S) * 2
+                        for i in range(0, len(data), step):
+                            if gen != self._gen:
+                                break
+                            streams[rate].write(data[i:i + step])
+                except Exception as e:  # noqa: BLE001 - one bad sentence must not stop the voice
+                    print(f"Piper could not speak: {e}")
+
+
 class PrintSpeaker:
     name = "console"
 
@@ -141,9 +266,14 @@ class SelfSpeechGuard:
             return any(start < e + self.MARGIN_S and end > s for s, e in self._spans)
 
 
-def make_speaker(echo: bool = True) -> Speaker:
+def make_speaker(echo: bool = True, settings=None) -> Speaker:
+    """The human voice if chosen in settings (ANSWER_VOICE=human) and voices are installed,
+    else the screen reader, else the Windows voice."""
     inner: Speaker
-    for factory in (ScreenReaderSpeaker, SapiSpeaker):
+    factories = [ScreenReaderSpeaker, SapiSpeaker]
+    if settings is not None and settings.answer_voice == "human":
+        factories.insert(0, lambda: PiperSpeaker(settings.voice_dir))
+    for factory in factories:
         try:
             inner = factory()
             break

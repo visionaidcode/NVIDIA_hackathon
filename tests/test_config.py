@@ -4,7 +4,7 @@ from app.config import load_settings, save_values
 
 ENV_NAMES = ["LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "STT_BASE_URL",
              "STT_API_KEY", "STT_MODEL", "STT_API", "STT_LANGUAGE", "AUDIO_BLOCK_FORMAT", "LLM_EXTRA_BODY",
-             "TRANSCRIPT_DIR", "SPEAKER_NAMES"]
+             "TRANSCRIPT_DIR", "SPEAKER_NAMES", "ANSWER_VOICE", "VOICE_DIR", "STT_KEYTERMS", "STT_FIXES"]
 
 
 @pytest.fixture
@@ -64,7 +64,7 @@ def test_rejects_unknown_stt_api(env):
 
 def test_transcript_settings(env, tmp_path):
     s = load_settings(env_file=None)
-    assert s.transcript_dir.endswith("Meeting Assistant") and s.speaker_names
+    assert s.transcript_dir.endswith("Saarathi") and s.speaker_names
     env.setenv("TRANSCRIPT_DIR", str(tmp_path))
     env.setenv("SPEAKER_NAMES", "off")
     s = load_settings(env_file=None)
@@ -80,3 +80,49 @@ def test_nebius_preset_turns_thinking_off(env):
     s = load_settings(env_file=None)
     assert s.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
     assert json.loads(PRESETS["nebius"]["extra_body"]) == s.extra_body
+
+
+def test_sarvam_stt_api_is_accepted(env):
+    env.setenv("STT_BASE_URL", "https://api.sarvam.ai")
+    env.setenv("STT_API_KEY", "sarvam-key")
+    env.setenv("STT_MODEL", "saaras:v4")
+    env.setenv("STT_API", "sarvam")
+    s = load_settings(env_file=None)
+    assert (s.stt_base_url, s.stt_model, s.stt_api) == ("https://api.sarvam.ai", "saaras:v4", "sarvam")
+
+
+def test_answer_voice_setting(env, tmp_path):
+    s = load_settings(env_file=None)
+    assert s.answer_voice == "human" and s.voice_dir.endswith("voices")
+    env.setenv("ANSWER_VOICE", "screenreader")
+    env.setenv("VOICE_DIR", str(tmp_path))
+    s = load_settings(env_file=None)
+    assert (s.answer_voice, s.voice_dir) == ("screenreader", str(tmp_path))
+    env.setenv("ANSWER_VOICE", "robot")
+    with pytest.raises(ValueError):
+        load_settings(env_file=None)
+
+
+def test_keyterms_and_fixes(env):
+    s = load_settings(env_file=None)
+    assert "VisionAid" in s.stt_keyterms and ("Vision 18", "VisionAid team") in s.stt_fixes
+    env.setenv("STT_KEYTERMS", "Priya, Ravi ,")
+    env.setenv("STT_FIXES", "Nebia's=Nebius; bad")
+    s = load_settings(env_file=None)
+    assert s.stt_keyterms == ("Priya", "Ravi") and s.stt_fixes == (("Nebia's", "Nebius"),)
+    env.setenv("STT_KEYTERMS", "none")
+    env.setenv("STT_FIXES", "none")
+    s = load_settings(env_file=None)
+    assert (s.stt_keyterms, s.stt_fixes) == ((), ())
+
+
+def test_old_settings_folder_moves_to_saarathi(monkeypatch, tmp_path):
+    from app.config import user_settings_dir
+
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    (tmp_path / "MeetingAssistant" / "voices").mkdir(parents=True)
+    (tmp_path / "MeetingAssistant" / "settings.env").write_text("LLM_PROVIDER=nebius\n", encoding="utf-8")
+    d = user_settings_dir()
+    assert d == tmp_path / "Saarathi" and (d / "settings.env").exists() and (d / "voices").is_dir()
+    assert not (tmp_path / "MeetingAssistant").exists()
+    assert user_settings_dir() == d  # second call: nothing left to move

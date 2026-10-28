@@ -44,3 +44,20 @@ def test_encode_wav_header():
 def test_clean_transcript_drops_non_speech_markers():
     assert clean_transcript("[no speech]") == ""
     assert clean_transcript('"Hello there."') == "Hello there."
+
+
+def test_find_screen_reader_picks_known_screen_reader(monkeypatch):
+    from app.audio import process_loopback
+
+    monkeypatch.setattr(process_loopback, "running_processes", lambda: [(1200, "explorer.exe"), (6532, "nvda.exe")])
+    assert process_loopback.find_screen_reader() == (6532, "NVDA")
+    monkeypatch.setattr(process_loopback, "running_processes", lambda: [(1200, "explorer.exe")])
+    assert process_loopback.find_screen_reader() is None
+
+
+def test_running_processes_lists_this_process():
+    import os
+
+    from app.audio.process_loopback import running_processes
+
+    assert any(pid == os.getpid() for pid, _ in running_processes())

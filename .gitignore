@@ -8,3 +8,13 @@ dist/
 .pytest_cache/
 eval/results/
 fixtures/private/
+# exe builds, voice files and meeting transcripts never go in the repo
+*.exe
+*.zip
+*.dist/
+*.build/
+*.onefile-build/
+voices/
+*.onnx
+!app/audio/data/silero_vad.onnx
+Meeting *.txt

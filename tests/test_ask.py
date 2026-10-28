@@ -46,3 +46,62 @@ def test_answer_streams_first_sentence_with_interrupt_and_stops_at_two():
 def test_audio_block_formats():
     assert audio_block(b"x", "input_audio")["input_audio"]["format"] == "wav"
     assert audio_block(b"x", "audio_url")["audio_url"]["url"].startswith("data:audio/wav;base64,")
+
+
+def test_build_messages_puts_earlier_turns_before_the_question():
+    snap = Snapshot(100.0, frames(1), [])
+    history = [("What happened in the last 30 seconds?", "Last 30 sec: a WhatsApp chat with Ravi was scrolled.")]
+    msgs = build_messages(snap, "What did they scroll?", history=history)
+    assert [m["role"] for m in msgs] == ["system", "user", "assistant", "user"]
+    assert msgs[1]["content"] == "Question: What happened in the last 30 seconds?"
+    assert msgs[2]["content"].startswith("Last 30 sec:")
+    assert msgs[-1]["content"][-1]["text"] == "Question: What did they scroll?"
+
+
+def test_build_messages_without_history_is_unchanged():
+    msgs = build_messages(Snapshot(100.0, frames(1), []), "Q?")
+    assert [m["role"] for m in msgs] == ["system", "user"]
+
+
+def test_apply_fixes_whole_words_any_case():
+    from app.llm.client import apply_fixes
+
+    fixes = (("Vision 18", "VisionAid team"), ("Vision18", "VisionAid team"))
+    assert apply_fixes("developed by the vision 18.", fixes) == "developed by the VisionAid team."
+    assert apply_fixes("Vision18 says hi", fixes) == "VisionAid team says hi"
+    assert apply_fixes("Vision 180 people", fixes) == "Vision 180 people"
+
+
+def test_meeting_language_is_told_next_to_the_question():
+    from app.qa.ask import meeting_language, question_text
+
+    tamil = [TranscriptLine(0, 1, "இப்ப நம்ம பார்க்கப் போறது for loop")]
+    assert meeting_language(tamil) == "Tamil"
+    assert question_text("What happened?", tamil) == "Question: What happened?\nAnswer in Tamil."
+    assert meeting_language([TranscriptLine(0, 1, "for loop prints zero to four")]) is None
+    assert meeting_language([]) is None
+
+
+def test_short_key_word_result_is_checked_again_without_key_words():
+    import httpx
+
+    from app.config import Settings
+    from app.llm.client import OpenAICompatClient, keyterm_suspect
+
+    assert keyterm_suspect("VisionAid.", ("VisionAid",)) and keyterm_suspect("NVIDIA NVIDIA", ("NVIDIA",))
+    assert not keyterm_suspect("Welcome, developed by the VisionAid team today.", ("VisionAid",))
+    assert not keyterm_suspect("Print I.", ("VisionAid",))
+
+    sent = []
+
+    def handler(req):
+        body = req.read()
+        sent.append(b"keyterms" in body)
+        return httpx.Response(200, json={"transcript": "VisionAid." if b"keyterms" in body else "Print I."})
+
+    s = Settings(provider="nebius", base_url="https://x/v1", api_key="k", model="m", stt_api="sarvam",
+                 stt_base_url="https://api.sarvam.ai", stt_api_key="sk", stt_model="saaras:v4",
+                 stt_keyterms=("VisionAid",))
+    c = OpenAICompatClient(s)
+    c._sarvam = httpx.AsyncClient(base_url="https://api.sarvam.ai", transport=httpx.MockTransport(handler))
+    assert asyncio.run(c.transcribe(b"wav")) == "Print I." and sent == [True, False]

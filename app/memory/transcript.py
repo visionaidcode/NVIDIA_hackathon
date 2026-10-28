@@ -56,6 +56,15 @@ class MeetingTranscript:
             with self.path.open("a", encoding="utf-8") as f:
                 f.write(format_line(line) + "\n")
 
+    def add_note(self, ts: float, note: str) -> None:
+        """A Nemotron note on a new screen, e.g. "[10:02:05] Screen: Slide: Yesterday's status ...".
+        Written to the file only; `lines` stays what was said."""
+        with self._lock:
+            if not self.path or not note.strip():
+                return
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(f"[{time.strftime('%H:%M:%S', time.localtime(ts))}] Screen: {note}\n")
+
     def stop(self) -> Path | None:
         with self._lock:
             path, self.path = self.path, None
