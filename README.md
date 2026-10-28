@@ -1,4 +1,4 @@
-# Saarathi
+# Saarthi
 
 A Windows desktop app for blind and low-vision people in video meetings. When a
 colleague shares their screen and says "look at this", press a hotkey (or type a
@@ -22,7 +22,7 @@ Built for the Nebius x NVIDIA Global AI Hackathon (track: Best Apps and Agents).
    they spoke goes to the answer model, which reads the highlighted tile, speaking
    indicator or caption name (Teams, Zoom, Meet). If no name is visible the line says
    "Speaker". Each line is saved at once to
-   `Documents\Saarathi\Meeting <date> <time>.txt`, e.g.
+   `Documents\Saarthi\Meeting <date> <time>.txt`, e.g.
    `[10:41:05] Host: the button moves to the top right`.
 5. While the transcript is running, questions are about the last 30 seconds. When you ask, a fresh
    screenshot is taken, and up to 4 screenshots (`MAX_FRAMES_PER_QUESTION`), the named transcript and your
@@ -91,7 +91,7 @@ On first run a **settings window** asks for the provider, API key and models
 (Nebius Token Factory and Sarvam AI saaras:v4 are pre-filled; paste a Nebius key for answers
 and a Sarvam key, from dashboard.sarvam.ai, for speech). **Test connection** checks both the answer
 model and the speech model. Settings are saved in
-`%APPDATA%\Saarathi\settings.env`; developers can use a `.env` in the
+`%APPDATA%\Saarthi\settings.env`; developers can use a `.env` in the
 project folder instead (see `.env.example`), which then takes priority. Never commit `.env`.
 
 The main window has a question box (Enter asks; empty asks "what is on screen"),
@@ -128,54 +128,54 @@ goes to the voice for its script, so an answer that mixes English and Tamil is r
 Choose **Answer voice** in Settings (Alt+G): *Human voice*, or *Screen reader* for NVDA / JAWS.
 If no voice files are found, the screen reader is used.
 
-Voice files (`.onnx` + `.onnx.json`) go in `%APPDATA%\Saarathi\voices` (or `VOICE_DIR`).
+Voice files (`.onnx` + `.onnx.json`) go in `%APPDATA%\Saarthi\voices` (or `VOICE_DIR`).
 The file name starts with the language: `en_...`, `ta_...`, `hi_...`, `te_...`, `ml_...`.
 English and Hindi (and Telugu, Malayalam, Marathi) come from the official Piper list:
 
 ```bash
-.venv\Scripts\python -m piper.download_voices --download-dir "%APPDATA%\Saarathi\voices" en_US-lessac-medium hi_IN-priyamvada-medium
+.venv\Scripts\python -m piper.download_voices --download-dir "%APPDATA%\Saarthi\voices" en_US-lessac-medium hi_IN-priyamvada-medium
 ```
 
 Tamil: `ta_IN-rasa_male-medium.onnx` and `.onnx.json` from
 [tinisoft/piper-ta_IN-rasa_male-medium](https://huggingface.co/tinisoft/piper-ta_IN-rasa_male-medium),
 trained on the [AI4Bharat Rasa](https://huggingface.co/datasets/ai4bharat/Rasa) dataset (CC-BY-4.0).
 
-## Install and run Saarathi.exe (version 1.0)
+## Install and run Saarthi.exe (version 1.0)
 
-Saarathi 1.0 is one file, `Saarathi.exe` (about 95 MB). There is no installer and no
+Saarthi 1.0 is one file, `Saarthi.exe` (about 95 MB). There is no installer and no
 Python to install.
 
-1. Copy `Saarathi.exe` to any folder, for example `Documents` or the Desktop.
+1. Copy `Saarthi.exe` to any folder, for example `Documents` or the Desktop.
 2. Press Enter on it. Windows may show **"Windows protected your PC"**, because the exe is not
    code-signed yet. Choose **More info**, then **Run anyway**. With NVDA or JAWS: press Tab
    to reach "More info", press Enter, then Tab to the "Run anyway" button and press Enter.
    Windows asks only once for each copy of the file.
 3. The first start takes a few seconds up to about 20 seconds, while the app unpacks itself once to
-   `%LOCALAPPDATA%\VisionAid\Saarathi\1.0.0`. Later starts are quick.
-4. The **Saarathi settings** window opens. Paste your Nebius Token Factory key (answers)
+   `%LOCALAPPDATA%\VisionAid\Saarthi\1.0.0`. Later starts are quick.
+4. The **Saarthi settings** window opens. Paste your Nebius Token Factory key (answers)
    and your Sarvam AI key (speech, from dashboard.sarvam.ai). Choose **Test connection**,
-   then **Save**. The window title now says **Saarathi 1.0** and the app says "Saarathi ready".
-5. For the human voices, copy the `voices` folder to `%APPDATA%\Saarathi\voices`
+   then **Save**. The window title now says **Saarthi 1.0** and the app says "Saarthi ready".
+5. For the human voices, copy the `voices` folder to `%APPDATA%\Saarthi\voices`
    (see Human voice). Without it, answers are read by NVDA, JAWS or the Windows voice.
 
 If the app does not start:
 
 - **"VCRUNTIME140.dll" or "MSVCP140.dll" was not found:** install the free Microsoft
-  Visual C++ Redistributable (x64) from Microsoft, then start Saarathi again.
+  Visual C++ Redistributable (x64) from Microsoft, then start Saarthi again.
 - **There is no "Run anyway" button:** Smart App Control is on, and it blocks every
   unsigned app. On that PC set up from source (see Setup) and press Enter on
-  `Saarathi.bat`. It starts the same app with the project's Python, which Windows trusts.
+  `Saarthi.bat`. It starts the same app with the project's Python, which Windows trusts.
 - **A file from the internet is still blocked:** open the file's Properties (Alt+Enter),
   check **Unblock**, and choose OK.
-- To try the app without keys (fake answers), run `Saarathi.exe --stub`.
+- To try the app without keys (fake answers), run `Saarthi.exe --stub`.
 
-To remove Saarathi, delete `Saarathi.exe`, then delete `%LOCALAPPDATA%\VisionAid\Saarathi`
-(unpacked app) and `%APPDATA%\Saarathi` (your keys, voices and settings). Transcripts stay in
-`Documents\Saarathi` until you delete them.
+To remove Saarthi, delete `Saarthi.exe`, then delete `%LOCALAPPDATA%\VisionAid\Saarthi`
+(unpacked app) and `%APPDATA%\Saarthi` (your keys, voices and settings). Transcripts stay in
+`Documents\Saarthi` until you delete them.
 
-## How Saarathi became one exe
+## How Saarthi became one exe
 
-Saarathi is written in Python. To ship it as one exe we used **Nuitka**, which turns the
+Saarthi is written in Python. To ship it as one exe we used **Nuitka**, which turns the
 Python code into C and compiles it with a C compiler (MinGW gcc, which Nuitka downloads
 by itself). Nuitka then packs the program, Python and every library (wxPython, numpy,
 onnxruntime, Piper, the voice-activity model, the NVDA / JAWS helpers) into a single file
@@ -200,7 +200,7 @@ question was answered in 1.6 s and a question after the recording in 2.1 s.
    powershell -ExecutionPolicy Bypass -File scripts\build_nuitka.ps1
    ```
 
-4. The exe is `C:\Saarathi-build\Saarathi.exe`. The first build takes 1-2 hours; later builds
+4. The exe is `C:\Saarthi-build\Saarthi.exe`. The first build takes 1-2 hours; later builds
    take less because the compiler cache is reused. Close other programs while it builds: it
    runs much faster. The build folder is outside OneDrive on purpose, because OneDrive locks
    the build files.
@@ -250,7 +250,7 @@ Answer latency for every question is logged to `eval/results/latency.jsonl`
 - Nothing is captured until you press Ctrl+Alt+M, and capture stops when you press
   it again.
 - The meeting transcript (text with speaker names) is saved in
-  `Documents\Saarathi`, with Nemotron's one-line notes on each screen.
+  `Documents\Saarthi`, with Nemotron's one-line notes on each screen.
   Screenshots and audio are never saved to disk: the recording's screenshots are kept in
   memory only and are gone when a new transcript starts or the app closes. The timing
   log has no audio, images or text.

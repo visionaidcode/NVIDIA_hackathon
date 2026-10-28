@@ -1,7 +1,7 @@
 """Settings from environment variables and a settings file.
 
 The settings file is `.env` in the current folder if there is one (developer
-setup), otherwise `%APPDATA%\\Saarathi\\settings.env`, which the settings
+setup), otherwise `%APPDATA%\\Saarthi\\settings.env`, which the settings
 window writes. Real environment variables win over both.
 """
 
@@ -68,7 +68,7 @@ class Settings:
     jpeg_quality: int = 70
     max_frames_per_question: int = 4
     latency_log: str = "eval/results/latency.jsonl"
-    # Meeting transcripts (Ctrl+Alt+M) are saved here; empty means Documents\Saarathi.
+    # Meeting transcripts (Ctrl+Alt+M) are saved here; empty means Documents\Saarthi.
     transcript_dir: str = ""
     # Read the active speaker's name from the meeting screen for each transcript line.
     speaker_names: bool = True
@@ -81,19 +81,25 @@ class Settings:
         return self.provider == "stub"
 
 
-APP_NAME = "Saarathi"
+APP_NAME = "Saarthi"
 APP_VERSION = "1.0"  # keep in step with pyproject.toml and scripts/build_nuitka.ps1
-OLD_APP_DIR = "MeetingAssistant"  # the folder's name before the app was renamed to Saarathi
+# The folder's earlier names (newest first): "Saarathi" was a misspelling, "MeetingAssistant" the first name.
+OLD_APP_DIRS = ("Saarathi", "MeetingAssistant")
 
 
 def user_settings_dir() -> Path:
     base = Path(os.environ.get("APPDATA") or str(Path.home()))
-    new, old = base / APP_NAME, base / OLD_APP_DIR
-    if not new.exists() and old.exists():
-        try:
-            old.rename(new)  # keep the keys, voices and timing log from before the rename
-        except OSError:
-            return old
+    new = base / APP_NAME
+    if new.exists():
+        return new
+    for name in OLD_APP_DIRS:
+        old = base / name
+        if old.exists():
+            try:
+                old.rename(new)  # keep the keys, voices and timing log from before the rename
+            except OSError:
+                return old
+            break
     return new
 
 

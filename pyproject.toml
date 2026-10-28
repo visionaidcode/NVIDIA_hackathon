@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "saarathi"
+name = "saarthi"
 version = "1.0.0"
 description = "Ask what was just shown and said in a video meeting. Answers are spoken aloud. Built for blind and low-vision users."
 readme = "README.md"

@@ -1,7 +1,7 @@
 @echo off
-rem Starts Saarathi from source with the project's Python.
-rem Use this where Windows blocks the unsigned Saarathi.exe (Smart App Control).
-rem Extra arguments are passed on, e.g.  Saarathi.bat --stub
+rem Starts Saarthi from source with the project's Python.
+rem Use this where Windows blocks the unsigned Saarthi.exe (Smart App Control).
+rem Extra arguments are passed on, e.g.  Saarthi.bat --stub
 cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" (
     echo Python environment not found. Set it up first, see README.md:
@@ -10,5 +10,5 @@ if not exist ".venv\Scripts\python.exe" (
     pause
     exit /b 1
 )
-title Saarathi
+title Saarthi
 ".venv\Scripts\python.exe" -m app.main %*

@@ -126,6 +126,12 @@ class PiperSpeaker:
                 self._files.setdefault(f.name[:2].lower(), f)  # en_US-lessac-medium.onnx -> en
         if not self._files:
             raise RuntimeError(f"no Piper voices in {voice_dir}")
+        # Imported here, on the calling thread, not inside the worker threads: in the packaged
+        # exe, importing piper / onnxruntime / pyaudio from background threads could hang.
+        import pyaudiowpatch
+        from piper import PiperVoice
+
+        self._pyaudio, self._piper_voice = pyaudiowpatch, PiperVoice
         self.default = "en" if "en" in self._files else next(iter(self._files))
         self._voices: dict[str, object] = {}
         self._loaded = {lang: threading.Event() for lang in self._files}
@@ -136,12 +142,12 @@ class PiperSpeaker:
         threading.Thread(target=self._run, name="piper", daemon=True).start()
 
     def _load(self, lang: str) -> None:
-        from piper import PiperVoice
-
+        start = time.time()
         try:
-            self._voices[lang] = PiperVoice.load(self._files[lang])
+            self._voices[lang] = self._piper_voice.load(self._files[lang])
+            print(f"Piper voice {self._files[lang].name} loaded in {time.time() - start:.1f} s", flush=True)
         except Exception as e:  # noqa: BLE001 - a broken voice falls back to the default one
-            print(f"Piper voice {self._files[lang].name} failed to load: {e}")
+            print(f"Piper voice {self._files[lang].name} failed to load: {e!r}", flush=True)
         self._loaded[lang].set()
 
     def _load_all(self) -> None:
@@ -155,7 +161,8 @@ class PiperSpeaker:
     def _voice(self, lang: str):
         if lang not in self._files:
             lang = self.default
-        self._loaded[lang].wait(60)
+        if not self._loaded[lang].wait(60):
+            print(f"Piper voice for '{lang}' still not loaded after 60 s", flush=True)
         return self._voices.get(lang) or self._voices.get(self.default)
 
     def speak(self, text: str, interrupt: bool = False) -> None:
@@ -169,8 +176,7 @@ class PiperSpeaker:
             self._gen += 1
 
     def _run(self) -> None:
-        import pyaudiowpatch as pyaudio
-
+        pyaudio = self._pyaudio
         pa = pyaudio.PyAudio()
         streams: dict[int, object] = {}
         while True:
@@ -180,6 +186,7 @@ class PiperSpeaker:
                     break
                 voice = self._voice(lang)
                 if voice is None:
+                    print(f"Piper has no voice to speak '{lang}'", flush=True)
                     break
                 try:
                     for chunk in voice.synthesize(part):
@@ -189,6 +196,7 @@ class PiperSpeaker:
                         if rate not in streams:
                             streams[rate] = pa.open(format=pyaudio.paInt16, channels=1, rate=rate,
                                                     output=True)
+                            print(f"Piper sound output opened ({rate} Hz)", flush=True)
                         data = chunk.audio_int16_bytes
                         step = int(rate * self.BLOCK_S) * 2
                         for i in range(0, len(data), step):
@@ -196,7 +204,7 @@ class PiperSpeaker:
                                 break
                             streams[rate].write(data[i:i + step])
                 except Exception as e:  # noqa: BLE001 - one bad sentence must not stop the voice
-                    print(f"Piper could not speak: {e}")
+                    print(f"Piper could not speak: {e!r}", flush=True)
 
 
 class PrintSpeaker:
@@ -276,8 +284,10 @@ def make_speaker(echo: bool = True, settings=None) -> Speaker:
     for factory in factories:
         try:
             inner = factory()
+            print(f"Answers are spoken by: {inner.name}", flush=True)
             break
-        except Exception:  # noqa: BLE001 - try the next output
+        except Exception as e:  # noqa: BLE001 - try the next output
+            print(f"Speech output not available, trying the next one: {e!r}", flush=True)
             continue
     else:
         return PrintSpeaker()

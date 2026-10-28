@@ -69,7 +69,7 @@ async def check_connection(settings) -> list[str]:
 
 class SettingsDialog(wx.Dialog):
     def __init__(self, parent=None, first_run: bool = False, error: str = ""):
-        super().__init__(parent, title="Saarathi settings",
+        super().__init__(parent, title="Saarthi settings",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.values = read_values()
         self._building = True

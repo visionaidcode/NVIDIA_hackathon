@@ -64,7 +64,7 @@ def test_rejects_unknown_stt_api(env):
 
 def test_transcript_settings(env, tmp_path):
     s = load_settings(env_file=None)
-    assert s.transcript_dir.endswith("Saarathi") and s.speaker_names
+    assert s.transcript_dir.endswith("Saarthi") and s.speaker_names
     env.setenv("TRANSCRIPT_DIR", str(tmp_path))
     env.setenv("SPEAKER_NAMES", "off")
     s = load_settings(env_file=None)
@@ -116,13 +116,24 @@ def test_keyterms_and_fixes(env):
     assert (s.stt_keyterms, s.stt_fixes) == ((), ())
 
 
-def test_old_settings_folder_moves_to_saarathi(monkeypatch, tmp_path):
+def test_old_settings_folder_moves_to_saarthi(monkeypatch, tmp_path):
     from app.config import user_settings_dir
 
     monkeypatch.setenv("APPDATA", str(tmp_path))
     (tmp_path / "MeetingAssistant" / "voices").mkdir(parents=True)
     (tmp_path / "MeetingAssistant" / "settings.env").write_text("LLM_PROVIDER=nebius\n", encoding="utf-8")
     d = user_settings_dir()
-    assert d == tmp_path / "Saarathi" and (d / "settings.env").exists() and (d / "voices").is_dir()
+    assert d == tmp_path / "Saarthi" and (d / "settings.env").exists() and (d / "voices").is_dir()
     assert not (tmp_path / "MeetingAssistant").exists()
     assert user_settings_dir() == d  # second call: nothing left to move
+
+
+def test_misspelled_settings_folder_moves_to_saarthi(monkeypatch, tmp_path):
+    from app.config import user_settings_dir
+
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    (tmp_path / "Saarathi" / "voices").mkdir(parents=True)
+    (tmp_path / "MeetingAssistant").mkdir()
+    d = user_settings_dir()
+    assert d == tmp_path / "Saarthi" and (d / "voices").is_dir()
+    assert not (tmp_path / "Saarathi").exists()

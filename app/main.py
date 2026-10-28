@@ -19,7 +19,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-from app.config import load_settings, settings_file
+from app.config import load_settings, settings_file, user_settings_dir
 from app.eval.latency import LatencyLog
 from app.input import hotkeys
 from app.llm.client import StubClient, make_client
@@ -298,7 +298,7 @@ class App:
 
     def greeting(self) -> str:
         mode = "test mode with fake answers" if isinstance(self.client, StubClient) else "ready"
-        return f"Saarathi {mode}."
+        return f"Saarthi {mode}."
 
     async def run_console(self, use_hotkeys: bool = True) -> None:
         await self.start(use_hotkeys)
@@ -460,15 +460,23 @@ def run_gui(force_stub: bool, use_hotkeys: bool) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Saarathi")
+    ap = argparse.ArgumentParser(description="Saarthi")
     ap.add_argument("--stub", action="store_true", help="fake model responses, no network")
     ap.add_argument("--console", action="store_true", help="no window; type questions in the console")
     ap.add_argument("--no-hotkeys", action="store_true")
     args = ap.parse_args()
 
-    if getattr(sys, "frozen", False):
+    if getattr(sys, "frozen", False) or "__compiled__" in globals():  # PyInstaller / Nuitka exe
         # Packaged .exe: look for a .env and write logs next to the exe, wherever it was started from.
         os.chdir(Path(sys.executable).parent)
+        # The exe has no console, so messages and errors (a voice that fails to load...) go to a
+        # file instead of nowhere. Rewritten on each start, so it stays small.
+        log_file = user_settings_dir() / "saarthi.log"
+        try:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            sys.stdout = sys.stderr = open(log_file, "w", encoding="utf-8", buffering=1)
+        except OSError:
+            pass
 
     if not args.console:
         run_gui(args.stub, not args.no_hotkeys)
