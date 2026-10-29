@@ -128,6 +128,10 @@ goes to the voice for its script, so an answer that mixes English and Tamil is r
 Choose **Answer voice** in Settings (Alt+G): *Human voice*, or *Screen reader* for NVDA / JAWS.
 If no voice files are found, the screen reader is used.
 
+`Saarthi.exe` has the English, Hindi and Tamil voices built in, so nothing needs to be copied.
+To add or replace a voice, put its files in `%APPDATA%\Saarthi\voices` (or `VOICE_DIR`): a voice
+there wins over the built-in voice for the same language.
+
 Voice files (`.onnx` + `.onnx.json`) go in `%APPDATA%\Saarthi\voices` (or `VOICE_DIR`).
 The file name starts with the language: `en_...`, `ta_...`, `hi_...`, `te_...`, `ml_...`.
 English and Hindi (and Telugu, Malayalam, Marathi) come from the official Piper list:
@@ -140,10 +144,18 @@ Tamil: `ta_IN-rasa_male-medium.onnx` and `.onnx.json` from
 [tinisoft/piper-ta_IN-rasa_male-medium](https://huggingface.co/tinisoft/piper-ta_IN-rasa_male-medium),
 trained on the [AI4Bharat Rasa](https://huggingface.co/datasets/ai4bharat/Rasa) dataset (CC-BY-4.0).
 
+Voice credits and licenses:
+
+| Voice | Source | Training data license |
+|---|---|---|
+| English `en_US-lessac-medium` | [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) | [Lessac Blizzard 2013](https://www.cstr.ed.ac.uk/projects/blizzard/2013/lessac_blizzard2013/license.html) (research use) |
+| Hindi `hi_IN-priyamvada-medium` | [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) | AI4Bharat IndicNLP, CC BY-NC-SA 4.0 (non-commercial) |
+| Tamil `ta_IN-rasa_male-medium` | [tinisoft](https://huggingface.co/tinisoft/piper-ta_IN-rasa_male-medium) | AI4Bharat Rasa, CC-BY-4.0 |
+
 ## Install and run Saarthi.exe (version 1.0)
 
-Saarthi 1.0 is one file, `Saarthi.exe` (about 95 MB). There is no installer and no
-Python to install.
+Saarthi 1.0 is one file, `Saarthi.exe` (about 250 MB, because the voices are inside). There
+is no installer, no Python to install and no voice files to copy.
 
 1. Copy `Saarthi.exe` to any folder, for example `Documents` or the Desktop.
 2. Press Enter on it. Windows may show **"Windows protected your PC"**, because the exe is not
@@ -154,9 +166,10 @@ Python to install.
    `%LOCALAPPDATA%\VisionAid\Saarthi\1.0.0`. Later starts are quick.
 4. The **Saarthi settings** window opens. Paste your Nebius Token Factory key (answers)
    and your Sarvam AI key (speech, from dashboard.sarvam.ai). Choose **Test connection**,
-   then **Save**. The window title now says **Saarthi 1.0** and the app says "Saarthi ready".
-5. For the human voices, copy the `voices` folder to `%APPDATA%\Saarthi\voices`
-   (see Human voice). Without it, answers are read by NVDA, JAWS or the Windows voice.
+   then **Save**. The window title now says **Saarthi 1.0** and the app says "Saarthi ready"
+   in the human voice.
+5. To see what the app is doing (which voice it uses, any error), press Windows+R and run
+   `notepad %APPDATA%\Saarthi\saarthi.log`. The file is written fresh on every start.
 
 If the app does not start:
 
@@ -178,7 +191,7 @@ To remove Saarthi, delete `Saarthi.exe`, then delete `%LOCALAPPDATA%\VisionAid\S
 Saarthi is written in Python. To ship it as one exe we used **Nuitka**, which turns the
 Python code into C and compiles it with a C compiler (MinGW gcc, which Nuitka downloads
 by itself). Nuitka then packs the program, Python and every library (wxPython, numpy,
-onnxruntime, Piper, the voice-activity model, the NVDA / JAWS helpers) into a single file
+onnxruntime, Piper and its three voices, the voice-activity model, the NVDA / JAWS helpers) into a single file
 with the VisionAid logo as its icon. When the exe starts, it unpacks that bundle once and
 runs from it.
 
@@ -187,7 +200,8 @@ question was answered in 1.6 s and a question after the recording in 2.1 s.
 
 ## Build the exe yourself
 
-1. Set up from source first (see Setup).
+1. Set up from source first (see Setup), and put the voices to build in into
+   `%APPDATA%\Saarthi\voices` (see Human voice). Every `.onnx` voice there goes inside the exe.
 2. Install Nuitka:
 
    ```bash

@@ -107,6 +107,11 @@ def split_by_language(text: str) -> list[tuple[str, str]]:
     return [(lang, part.strip()) for lang, part in runs if part.strip()]
 
 
+# Voices built into Saarthi.exe (scripts/build_nuitka.ps1 puts them next to the app folder).
+# Running from source there is no such folder, and only VOICE_DIR is used.
+BUNDLED_VOICE_DIR = Path(__file__).resolve().parents[2] / "voices"
+
+
 class PiperSpeaker:
     """Human-sounding offline voices (Piper, no API). One voice file per language; each part of
     the text goes to the voice for its script, so one answer can mix English and Tamil.
@@ -118,14 +123,15 @@ class PiperSpeaker:
     name = "Human voice"
     BLOCK_S = 0.1
 
-    def __init__(self, voice_dir: str | Path):
-        files = sorted(Path(voice_dir).glob("*.onnx"))
+    def __init__(self, voice_dir: str | Path, fallback_dir: str | Path | None = None):
+        # The user's voice folder wins; the voices inside the exe fill in any language it lacks.
         self._files: dict[str, Path] = {}
-        for f in files:
-            if Path(f"{f}.json").exists():
-                self._files.setdefault(f.name[:2].lower(), f)  # en_US-lessac-medium.onnx -> en
+        for d in (voice_dir, fallback_dir):
+            for f in sorted(Path(d).glob("*.onnx")) if d else ():
+                if Path(f"{f}.json").exists():
+                    self._files.setdefault(f.name[:2].lower(), f)  # en_US-lessac-medium.onnx -> en
         if not self._files:
-            raise RuntimeError(f"no Piper voices in {voice_dir}")
+            raise RuntimeError(f"no Piper voices in {voice_dir} or {fallback_dir}")
         # Imported here, on the calling thread, not inside the worker threads: in the packaged
         # exe, importing piper / onnxruntime / pyaudio from background threads could hang.
         import pyaudiowpatch
@@ -145,7 +151,7 @@ class PiperSpeaker:
         start = time.time()
         try:
             self._voices[lang] = self._piper_voice.load(self._files[lang])
-            print(f"Piper voice {self._files[lang].name} loaded in {time.time() - start:.1f} s", flush=True)
+            print(f"Piper voice {self._files[lang]} loaded in {time.time() - start:.1f} s", flush=True)
         except Exception as e:  # noqa: BLE001 - a broken voice falls back to the default one
             print(f"Piper voice {self._files[lang].name} failed to load: {e!r}", flush=True)
         self._loaded[lang].set()
@@ -280,7 +286,7 @@ def make_speaker(echo: bool = True, settings=None) -> Speaker:
     inner: Speaker
     factories = [ScreenReaderSpeaker, SapiSpeaker]
     if settings is not None and settings.answer_voice == "human":
-        factories.insert(0, lambda: PiperSpeaker(settings.voice_dir))
+        factories.insert(0, lambda: PiperSpeaker(settings.voice_dir, BUNDLED_VOICE_DIR))
     for factory in factories:
         try:
             inner = factory()

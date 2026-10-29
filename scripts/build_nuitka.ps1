@@ -7,16 +7,24 @@
 # the thousands of build files locks them and breaks the build). Change it with -OutDir.
 # On its first start the exe unpacks itself once to
 # %LOCALAPPDATA%\VisionAid\Saarthi\1.0.0 and reuses that on later starts.
+# Run it from a normal terminal, not from inside the Claude app: that app keeps its own private
+# copy of %APPDATA%, so the voices would come from the wrong folder.
 # First build takes 1-2 hours (numpy, onnxruntime, wxPython, openai are compiled to C);
 # later builds reuse the ccache. Without Visual Studio, Nuitka downloads MinGW itself.
-# Piper voices are not bundled: the app reads them from %APPDATA%\Saarthi\voices.
+# The Piper voices in -VoiceDir (*.onnx + *.onnx.json) are built into the exe, so the human
+# voice works on any PC with no setup. A voice in %APPDATA%\Saarthi\voices still wins.
 
-param([string]$OutDir = "C:\Saarthi-build")
+param([string]$OutDir = "C:\Saarthi-build", [string]$VoiceDir = "$env:APPDATA\Saarthi\voices")
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $python = Join-Path $root ".venv\Scripts\python.exe"
+
+$voices = @(Get-ChildItem $VoiceDir -Filter *.onnx -ErrorAction SilentlyContinue)
+if ($voices.Count -eq 0) { throw "No Piper voices in $VoiceDir. Put the voice files there or pass -VoiceDir." }
+Write-Host "Voices built in: $($voices.Name -join ', ')"
+$vd = (Resolve-Path $VoiceDir).Path.Replace("\", "/")
 
 # NVDA / JAWS output DLLs: not package data to Nuitka; accessible_output2 loads them from its lib folder.
 # Forward slashes: Nuitka's file pattern does not match "*.dll" after a backslash path.
@@ -32,6 +40,8 @@ $ao2 = & $python -c "import accessible_output2, os; print(os.path.dirname(access
     --output-filename=Saarthi.exe `
     --include-data-dir=app\audio\data=app\audio\data `
     --include-data-files="$ao2/lib/*.dll=accessible_output2/lib/" `
+    --include-data-files="$vd/*.onnx=voices/" `
+    --include-data-files="$vd/*.onnx.json=voices/" `
     --include-package=app `
     --include-package=comtypes `
     --include-package=openai `
