@@ -28,6 +28,8 @@ from app.memory.history import PageNoter, ScreenHistory
 from app.memory.transcript import MeetingTranscript, format_line
 from app.qa.ask import answer_question
 from app.qa.review import answer_from_recording
+from app.rag.index import MeetingIndexer
+from app.rag.store import MeetingStore, list_meetings, meeting_label
 from app.screen.capture import ScreenCapture
 from app.speech.out import SelfSpeechGuard, make_speaker
 from app.stt.speaker import SpeakerNamer
@@ -40,8 +42,9 @@ HISTORY_TURNS = 3
 class App:
     """Capture runs only while a meeting transcript is being recorded (Ctrl+Alt+M).
     While recording, questions are answered from the last 30 seconds of screen and the
-    transcript. After it stops, from the whole recording (every screen, Nemotron's page notes,
-    the transcript) until a new recording starts or the app closes."""
+    transcript. After it stops, from the whole recording, saved in its meeting folder (every
+    screen, the transcript, summaries, 1-minute parts to search), until a new recording starts;
+    after a restart the last recorded meeting is loaded again."""
 
     def __init__(self, settings, client, speaker):
         self.settings = settings
@@ -70,6 +73,11 @@ class App:
         self._stt_task: asyncio.Task | None = None
         self._unregister_hotkeys = None
         self.loop: asyncio.AbstractEventLoop | None = None
+        # The meeting being recorded, or the last one recorded (also after a restart): what
+        # questions after the recording are answered from (app/rag, app/qa/review.py).
+        self.store: MeetingStore | None = MeetingStore.load_latest(settings.transcript_dir)
+        self.indexer: MeetingIndexer | None = None
+        self._index_task: asyncio.Task | None = None
 
     def _new_screen(self) -> ScreenCapture:
         return ScreenCapture(self.buffer, self.settings.frame_interval,
@@ -103,19 +111,40 @@ class App:
     def _on_note(self, shot) -> None:
         """Nemotron's note on a new screen: into the transcript file and the window log."""
         self.meeting.add_note(shot.first_ts, shot.note)
+        if self.store and self.recording:
+            self.store.set_note(shot.number, shot.note)
         if self.on_transcript:
             self.on_transcript(TranscriptLine(shot.first_ts, shot.first_ts, shot.note, "Screen"))
 
     def _on_line(self, line) -> None:
         self.meeting.add(line)
+        if self.store and self.recording:
+            self.store.add_line(line)
         if self.on_transcript:
             self.on_transcript(line)
+
+    def _on_summary(self, summary) -> None:
+        """A summary of the last few minutes: into the transcript file and the window log."""
+        self.meeting.add_summary(summary.start, summary.end, summary.text)
+        if self.on_transcript:
+            self.on_transcript(TranscriptLine(summary.end, summary.end, summary.text, "Summary"))
 
     async def start_recording(self) -> None:
         path = self.meeting.start()
         self.buffer.clear()
         self.history.clear()
-        self.screens.clear(time.time())  # the previous recording's screens are gone
+        started = time.time()
+        self.screens.clear(started)  # the previous recording's screens are gone
+        # Every screen, line and note also goes into the meeting folder, and is indexed
+        # as it comes, for questions after the recording.
+        self.store = MeetingStore(path.parent, started, self.settings.save_screenshots)
+        # With screenshots not saved, they are still in memory until the app closes.
+        self.store.memory = lambda n: shot.jpeg if (shot := self.screens.get(n)) else None
+        self.screens.on_new = self.store.add_screen
+        self.screens.on_seen = self.store.screen_seen
+        self.indexer = MeetingIndexer(self.client, self.store, self.settings.summary_seconds,
+                                      on_summary=self._on_summary)
+        self.store.save()
         self.screen = self._new_screen()
         self.screen.start()
         try:
@@ -126,7 +155,8 @@ class App:
                                "transcribed. Screen questions still work.")
         self.recording = True
         self._noter_task = asyncio.create_task(self.noter.run())
-        self.speaker.speak(f"Meeting transcript started. Saving to {path.name}. "
+        self._index_task = asyncio.create_task(self.indexer.run())
+        self.speaker.speak(f"Meeting transcript started. Saving to {path.parent.name}. "
                            f"Ask with control alt space; press control alt M to stop.", True)
 
     async def stop_recording(self) -> None:
@@ -147,12 +177,31 @@ class App:
         if self.noter.pending():
             self.speaker.speak("Finishing the notes on the last screens.", True)
             await self.noter.finish(30)
-        path = self.meeting.stop()
+        await self._finish_index()
+        path = self.meeting.stop()  # the folder now has the end time in its name
         self.buffer.clear()
+        if path and self.store:
+            self.store.folder = path.parent
         if path:
-            self.speaker.speak(f"Meeting transcript stopped. {len(self.meeting.lines)} lines saved to "
-                               f"{path.name} in {path.parent}. You can still ask about this recording.",
-                               True)
+            self.speaker.speak(f"Meeting transcript stopped. {len(self.meeting.lines)} lines saved to the folder "
+                               f"{path.parent.name} in {path.parent.parent}. You can now ask about the "
+                               f"whole meeting.", True)
+
+    async def _finish_index(self) -> None:
+        """Index the last minutes and write the last summary, so questions can start."""
+        self.screens.on_new = self.screens.on_seen = None
+        if self._index_task:
+            self._index_task.cancel()
+            self._index_task = None
+        if not self.indexer or not self.store:
+            return
+        self.speaker.speak("Preparing the meeting for questions.", True)
+        try:
+            await asyncio.wait_for(self.indexer.update(final=True), 60)
+        except Exception as e:  # noqa: BLE001 - questions still work from what was indexed
+            self.log.write("index_error", error=type(e).__name__)
+        self.store.ended = time.time()
+        self.store.save()
 
     async def _toggle_recording(self) -> None:
         if self._switching:
@@ -180,7 +229,7 @@ class App:
             self.speaker.speak("The transcript is still starting or stopping. Please ask again in a moment.",
                                True)
             return
-        if not self.recording and not len(self.screens):
+        if not self.recording and not self.store:
             self.speaker.speak("The meeting is not being transcribed. Press control alt M to start, "
                                "then ask your question.", True)
             return
@@ -216,13 +265,13 @@ class App:
             self.speaker.speak(f"Sorry, the answer failed: {type(e).__name__}. {str(e)[:150]}", True)
 
     async def _answer_recording(self, question: str, question_end: float) -> None:
-        """After recording stopped: Nemotron picks the screens, then answers from them."""
+        """After recording stopped: find the minutes that answer the question, then answer from
+        their screenshots, transcript and the meeting's summaries."""
         try:
             self.speaker.speak("Checking the recording.", True)
             result = await answer_from_recording(
-                self.client, self.screens.shots(), list(self.meeting.lines), question,
-                self.screens.started, speak=self.speaker.speak,
-                max_frames=self.settings.max_frames_per_question, log=self.log,
+                self.client, self.store, question, speak=self.speaker.speak,
+                max_images=self.settings.max_recording_images, log=self.log,
                 question_end=question_end, history=list(self.history))
             self.last_answer = result.text
             self.history.append((question, result.text))
@@ -232,6 +281,31 @@ class App:
             self.log.write("answer_error", error=type(e).__name__)
             self.speaker.speak(f"Sorry, the answer failed: {type(e).__name__}. {str(e)[:150]}", True)
 
+    def meetings(self) -> list[Path]:
+        """Saved meetings that can be asked about, newest first."""
+        return list_meetings(self.settings.transcript_dir)
+
+    def select_meeting(self, folder: Path) -> bool:
+        """Ask about this saved meeting from now on (only when not recording). Says which meeting
+        it is, or why it cannot be used."""
+        if self.recording or self._switching:
+            self.speaker.speak("Stop the meeting transcript first, then choose a meeting.", True)
+            return False
+        try:
+            store = MeetingStore.load(folder)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            self.speaker.speak(f"That meeting could not be opened: {type(e).__name__}.", True)
+            return False
+        if self._current and not self._current.done() and self.loop:
+            self.loop.call_soon_threadsafe(self._current.cancel)  # an answer about the old meeting
+        self.speaker.stop()
+        self.store = store
+        self.history.clear()  # follow-ups belong to the meeting they were about
+        lines, _ = store.snapshot()
+        self.speaker.speak(f"Meeting {meeting_label(folder)} selected, {len(lines)} line{'' if len(lines) == 1 else 's'}. "
+                           f"Ask with control alt space.", True)
+        return True
+
     def repeat(self) -> None:
         self.speaker.speak(self.last_answer or "No answer yet.", True)
 
@@ -240,11 +314,13 @@ class App:
 
     def status_text(self) -> str:
         if not self.recording:
-            if len(self.screens):
-                n, notes = len(self.screens), sum(1 for s in self.screens.shots() if s.note)
-                return (f"Not transcribing. Questions answer from the last recording: "
-                        f"{len(self.meeting.lines)} lines, {n} screen{'' if n == 1 else 's'}, "
-                        f"{notes} with notes. Press control alt M to start a new one.")
+            if self.store:
+                lines, screens = self.store.snapshot()
+                n, summaries = len(screens), sum(1 for s in self.store.summaries if s.text)
+                return (f"Not transcribing. Questions answer from the meeting of {meeting_label(self.store.folder)}: "
+                        f"{len(lines)} lines, {n} screen{'' if n == 1 else 's'}, "
+                        f"{summaries} summar{'y' if summaries == 1 else 'ies'}. "
+                        f"Press control alt M to start a new one.")
             return "Not transcribing. Press control alt M to start the meeting transcript."
         snap = self.buffer.snapshot()
         parts = [f"Transcribing the meeting: {len(self.meeting.lines)} lines saved, "
@@ -261,6 +337,10 @@ class App:
             parts.append(f"Speaker name error: {type(self.namer.last_error).__name__}.")
         if self.noter.last_error:
             parts.append(f"Screen note error: {type(self.noter.last_error).__name__}.")
+        if self.indexer and self.indexer.last_error:
+            parts.append(f"Meeting search or summary error: {type(self.indexer.last_error).__name__}.")
+        if self.store and self.store.last_error:
+            parts.append(f"Saving the meeting folder failed: {type(self.store.last_error).__name__}.")
         return " ".join(parts)
 
     def status(self) -> None:
@@ -286,7 +366,7 @@ class App:
             self._unregister_hotkeys = None
         if self.recording:
             await self.stop_recording()
-        for task in (self._current, self._stt_task, self._noter_task):
+        for task in (self._current, self._stt_task, self._noter_task, self._index_task):
             if task and not task.done():
                 task.cancel()
         self.screen.stop()
@@ -439,6 +519,10 @@ def run_gui(force_stub: bool, use_hotkeys: bool) -> None:
         app = state["app"]
         return f"{state['summary']}. {app.status_text()}", app.recording
 
+    def get_meetings() -> tuple[list[Path], Path | None]:
+        app = state["app"]
+        return app.meetings(), app.store.folder if app.store and not app.recording else None
+
     frame = MainWindow(
         on_ask=lambda q: state["app"].ask(q),
         on_repeat=lambda: state["app"].repeat(),
@@ -446,13 +530,21 @@ def run_gui(force_stub: bool, use_hotkeys: bool) -> None:
         on_record=lambda: state["app"].toggle_recording(),
         on_settings=open_settings,
         get_status=lambda: get_status() if "app" in state else ("Starting...", False),
+        get_meetings=lambda: get_meetings() if "app" in state else ([], None),
+        on_meeting=lambda folder: "app" in state and state["app"].select_meeting(folder),
     )
     frame.Show()
     start(settings)
 
     def on_close(event):
+        print("close: window closing", flush=True)
         frame.timer.Stop()
-        state["runner"].stop()
+        t = time.perf_counter()
+        try:
+            state["runner"].stop()
+            print(f"close: app stopped in {time.perf_counter() - t:.1f}s", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"close: stop failed after {time.perf_counter() - t:.1f}s: {e!r}", flush=True)
         event.Skip()
 
     frame.Bind(wx.EVT_CLOSE, on_close)

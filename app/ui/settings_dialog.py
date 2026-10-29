@@ -1,7 +1,9 @@
-"""Settings window: provider, API keys and models. Native controls, keyboard only.
+"""Settings window: API keys and a few choices. Native controls, keyboard only.
 
-Each field has a visible label created just before it, which is how NVDA and
-JAWS name native Windows edit boxes.
+Saarthi uses fixed services: answers from NVIDIA Nemotron on Nebius Token Factory, speech to
+text from Sarvam AI, meeting search from Qwen3-Embedding-8B on Nebius. They are shown read-only;
+the user only enters the two keys. Each field has a visible label created just before it, which
+is how NVDA and JAWS name native Windows edit boxes.
 """
 
 from __future__ import annotations
@@ -15,37 +17,30 @@ import numpy as np
 import wx
 
 from app.audio.wav import encode_wav
-from app.config import DEFAULT_KEYTERMS, load_settings, read_values, save_values, settings_file
+from app.config import DEFAULT_EMBED_MODEL, OFF, load_settings, read_values, save_values, settings_file
 
-PROVIDER_CHOICES = [
-    ("nebius", "Nebius Token Factory"),
-    ("openrouter", "OpenRouter"),
-    ("stub", "Test mode (no key, fake answers)"),
-]
+PROVIDER = "nebius"
+PROVIDER_NAME = "Nebius Token Factory"
 PRESETS = {
-    "openrouter": {"url": "https://openrouter.ai/api/v1",
-                   "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"},
     # Nebius Token Factory takes images but not audio, so speech goes to Sarvam AI below.
     # Thinking off: on real screenshots the model otherwise spends the whole answer budget reasoning.
     "nebius": {"url": "https://api.tokenfactory.nebius.com/v1", "model": "nvidia/Nemotron-3.5-Super-VL",
                "extra_body": '{"chat_template_kwargs": {"enable_thinking": false}}'},
 }
-STT_API_CHOICES = [
-    ("chat", "Chat model with audio input (Voxtral, Qwen Omni, Gemini)"),
-    ("transcriptions", "Transcriptions endpoint (Whisper style)"),
-    ("sarvam", "Sarvam AI speech to text (saaras)"),
-]
 DEFAULT_STT_MODEL = "saaras:v4"
 DEFAULT_STT_URL = "https://api.sarvam.ai"
 DEFAULT_STT_API = "sarvam"
+STT_API_NAME = "Sarvam AI speech to text (saaras)"
 ANSWER_VOICE_CHOICES = [
     ("human", "Human voice (offline Piper voices, English, Tamil, Hindi...)"),
     ("screenreader", "Screen reader (NVDA or JAWS), else the Windows voice"),
 ]
+SUMMARY_CHOICES = [("2.5", "Every 2.5 minutes"), ("5", "Every 5 minutes")]
 
 
 async def check_connection(settings) -> list[str]:
-    """One tiny text call to the answer model and one short audio call to the speech model."""
+    """One tiny text call to the answer model, one short audio call to the speech model, and one
+    embedding call to the meeting search model if there is one."""
     from app.llm.client import OpenAICompatClient
 
     client = OpenAICompatClient(settings)
@@ -55,9 +50,11 @@ async def check_connection(settings) -> list[str]:
         msgs = [{"role": "user", "content": "Reply with the single word OK."}]
         return "".join([d async for d in client.stream_chat(msgs, temperature=0, max_tokens=300)])
 
-    for label, call in (("Answer model", answer_call),
-                        ("Speech to text model",
-                         lambda: client.transcribe(encode_wav(np.zeros(8000, dtype=np.float32))))):
+    checks = [("Answer model", answer_call),
+              ("Speech to text model", lambda: client.transcribe(encode_wav(np.zeros(8000, dtype=np.float32))))]
+    if settings.embed_model:
+        checks.append(("Meeting search model", lambda: client.embed(["test"])))
+    for label, call in checks:
         t0 = time.perf_counter()
         try:
             await asyncio.wait_for(call(), timeout=45)
@@ -65,6 +62,14 @@ async def check_connection(settings) -> list[str]:
         except Exception as e:  # noqa: BLE001 - report every failure in words
             results.append(f"{label}: failed. {type(e).__name__}: {str(e)[:200]}")
     return results
+
+
+def summary_choice(minutes: str) -> int:
+    """The dropdown entry for a saved SUMMARY_MINUTES: 2.5, or 5 for anything above 3.75."""
+    try:
+        return 1 if float(minutes) > 3.75 else 0
+    except ValueError:
+        return 0
 
 
 class SettingsDialog(wx.Dialog):
@@ -75,7 +80,8 @@ class SettingsDialog(wx.Dialog):
         self._building = True
         root = wx.BoxSizer(wx.VERTICAL)
 
-        intro = "Welcome. Enter your API key to start." if first_run else "Change the providers, keys and models."
+        intro = ("Welcome. Enter your Nebius and Sarvam API keys to start." if first_run
+                 else "Change your API keys, answer voice and meeting options.")
         if error:
             intro = f"{error}\n{intro}"
         intro_text = wx.StaticText(self, label=intro)
@@ -96,12 +102,15 @@ class SettingsDialog(wx.Dialog):
             grid.Add(ctrl, 1, wx.EXPAND)
             return ctrl
 
+        def fixed(label: str, value: str) -> wx.TextCtrl:
+            # Read-only, but still reached with Tab and read by screen readers (a disabled
+            # control would be skipped).
+            return row(label, lambda: wx.TextCtrl(self, value=value, style=wx.TE_READONLY))
+
         # --- answer model -------------------------------------------------
         grid.Add(wx.StaticText(self, label="Screen answers (NVIDIA Nemotron)"), 0, wx.TOP, 4)
         grid.AddSpacer(0)
-        self.provider = row("&Provider:", lambda: wx.Choice(
-            self, choices=[label for _, label in PROVIDER_CHOICES]))
-        self.base_url = row("Base &URL:", lambda: wx.TextCtrl(self))
+        self.provider = fixed("&Provider:", PROVIDER_NAME)
 
         grid.Add(wx.StaticText(self, label="API &key:"), 0, wx.ALIGN_CENTER_VERTICAL)
         key_box = wx.BoxSizer(wx.HORIZONTAL)
@@ -114,15 +123,12 @@ class SettingsDialog(wx.Dialog):
         self.show_key = wx.CheckBox(self, label="&Show keys")
         grid.Add(self.show_key)
 
-        self.model = row("&Model ID:", lambda: wx.TextCtrl(self))
+        self.model = fixed("&Model ID:", PRESETS[PROVIDER]["model"])
 
         # --- speech to text -----------------------------------------------
         grid.Add(wx.StaticText(self, label="Speech to text (meeting audio)"), 0, wx.TOP, 10)
         grid.AddSpacer(0)
-        grid.AddSpacer(0)
-        self.stt_same = wx.CheckBox(self, label="Use the same &base URL and key as above")
-        grid.Add(self.stt_same)
-        self.stt_url = row("Speech base U&RL:", lambda: wx.TextCtrl(self))
+        self.stt_api = fixed("Speech &API type:", STT_API_NAME)
         grid.Add(wx.StaticText(self, label="Speech API k&ey:"), 0, wx.ALIGN_CENTER_VERTICAL)
         stt_key_box = wx.BoxSizer(wx.HORIZONTAL)
         self.stt_key_hidden = wx.TextCtrl(self, style=wx.TE_PASSWORD)
@@ -130,18 +136,22 @@ class SettingsDialog(wx.Dialog):
         stt_key_box.Add(self.stt_key_hidden, 1, wx.EXPAND)
         stt_key_box.Add(self.stt_key_shown, 1, wx.EXPAND)
         grid.Add(stt_key_box, 1, wx.EXPAND)
-        self.stt_model = row("Speech m&odel ID:", lambda: wx.TextCtrl(self))
-        self.stt_api = row("Speech &API type:", lambda: wx.Choice(
-            self, choices=[label for _, label in STT_API_CHOICES]))
-        self.stt_language = row("Speech &language code (optional, e.g. ta-IN):", lambda: wx.TextCtrl(self))
-        self.stt_keyterms = row("Speech key &words, comma separated (names, products):",
-                                lambda: wx.TextCtrl(self))
+        self.stt_model = fixed("Speech m&odel ID:", DEFAULT_STT_MODEL)
 
         # --- answer voice -------------------------------------------------
         grid.Add(wx.StaticText(self, label="Spoken answers"), 0, wx.TOP, 10)
         grid.AddSpacer(0)
         self.answer_voice = row("Answer voi&ce:", lambda: wx.Choice(
             self, choices=[label for _, label in ANSWER_VOICE_CHOICES]))
+
+        # --- questions after a recording ------------------------------------
+        grid.Add(wx.StaticText(self, label="Questions after the recording"), 0, wx.TOP, 10)
+        grid.AddSpacer(0)
+        self.summary_minutes = row("Meeting summar&y:", lambda: wx.Choice(
+            self, choices=[label for _, label in SUMMARY_CHOICES]))
+        grid.AddSpacer(0)
+        self.save_screenshots = wx.CheckBox(self, label="Save every screenshot &in the meeting folder")
+        grid.Add(self.save_screenshots)
 
         root.Add(grid, 1, wx.ALL | wx.EXPAND, 10)
 
@@ -160,18 +170,13 @@ class SettingsDialog(wx.Dialog):
         self.CentreOnScreen()
 
         self._load()
-        self.provider.Bind(wx.EVT_CHOICE, self._on_provider)
         self.show_key.Bind(wx.EVT_CHECKBOX, lambda e: self._sync_key_visibility())
-        self.stt_same.Bind(wx.EVT_CHECKBOX, lambda e: self._update_enabled())
         self.test_btn.Bind(wx.EVT_BUTTON, self._on_test)
         save_btn.Bind(wx.EVT_BUTTON, self._on_save)
         self._building = False
-        (self.key_hidden if self._provider() != "stub" and not self._key() else self.provider).SetFocus()
+        (self.stt_key_hidden if self._key() and not self._stt_key() else self.key_hidden).SetFocus()
 
     # --- helpers ---------------------------------------------------------
-
-    def _provider(self) -> str:
-        return PROVIDER_CHOICES[max(0, self.provider.GetSelection())][0]
 
     def _key(self) -> str:
         return (self.key_shown if self.show_key.IsChecked() else self.key_hidden).GetValue().strip()
@@ -181,27 +186,13 @@ class SettingsDialog(wx.Dialog):
 
     def _load(self) -> None:
         v = self.values
-        provider = (v.get("LLM_PROVIDER") or "nebius").split(" #")[0].strip().lower()
-        keys = [k for k, _ in PROVIDER_CHOICES]
-        self.provider.SetSelection(keys.index(provider) if provider in keys else 0)
-        preset = PRESETS.get(self._provider(), {})
-        self.base_url.SetValue(v.get("LLM_BASE_URL") or preset.get("url", ""))
         self.key_hidden.SetValue(v.get("LLM_API_KEY", ""))
-        self.model.SetValue(v.get("LLM_MODEL") or preset.get("model", ""))
-        # First run: speech has its own provider (Sarvam AI), since Nebius does not take audio.
-        same = bool(v) and not v.get("STT_BASE_URL") and not v.get("STT_API_KEY")
-        self.stt_same.SetValue(same)
-        self.stt_url.SetValue(v.get("STT_BASE_URL") or DEFAULT_STT_URL)
         self.stt_key_hidden.SetValue(v.get("STT_API_KEY", ""))
-        self.stt_model.SetValue(v.get("STT_MODEL") or DEFAULT_STT_MODEL)
-        stt_keys = [k for k, _ in STT_API_CHOICES]
-        stt_api = v.get("STT_API", DEFAULT_STT_API)
-        self.stt_api.SetSelection(stt_keys.index(stt_api) if stt_api in stt_keys else 0)
-        self.stt_language.SetValue(v.get("STT_LANGUAGE", ""))
-        self.stt_keyterms.SetValue(v.get("STT_KEYTERMS") or DEFAULT_KEYTERMS)
         voice_keys = [k for k, _ in ANSWER_VOICE_CHOICES]
         voice = (v.get("ANSWER_VOICE") or "human").lower()
         self.answer_voice.SetSelection(voice_keys.index(voice) if voice in voice_keys else 0)
+        self.summary_minutes.SetSelection(summary_choice(v.get("SUMMARY_MINUTES", "")))
+        self.save_screenshots.SetValue((v.get("SAVE_SCREENSHOTS") or "on").lower() not in OFF)
         self._sync_key_visibility()
 
     def _sync_key_visibility(self) -> None:
@@ -212,45 +203,25 @@ class SettingsDialog(wx.Dialog):
                 dst.SetValue(src.GetValue())
             hidden.Show(not show)
             shown.Show(show)
-        self._update_enabled()
         self.Layout()
 
-    def _update_enabled(self) -> None:
-        real = self._provider() != "stub"
-        same = self.stt_same.IsChecked()
-        for c in (self.base_url, self.key_hidden, self.key_shown, self.model, self.show_key,
-                  self.stt_same, self.stt_model, self.stt_api, self.stt_language, self.stt_keyterms,
-                  self.test_btn):
-            c.Enable(real)
-        for c in (self.stt_url, self.stt_key_hidden, self.stt_key_shown):
-            c.Enable(real and not same)
-
-    def _on_provider(self, event) -> None:
-        preset = PRESETS.get(self._provider())
-        if preset:
-            known_urls = {p["url"] for p in PRESETS.values()}
-            if self.base_url.GetValue().strip() in known_urls | {""}:
-                self.base_url.SetValue(preset["url"])
-            known_models = {p["model"] for p in PRESETS.values()}
-            if self.model.GetValue().strip() in known_models | {""}:
-                self.model.SetValue(preset["model"])
-        self._update_enabled()
-
     def collect(self) -> dict[str, str]:
-        same = self.stt_same.IsChecked()
+        preset = PRESETS[PROVIDER]
         return {
-            "LLM_PROVIDER": self._provider(),
-            "LLM_BASE_URL": self.base_url.GetValue().strip(),
+            "LLM_PROVIDER": PROVIDER,
+            "LLM_BASE_URL": preset["url"],
             "LLM_API_KEY": self._key(),
-            "LLM_MODEL": self.model.GetValue().strip(),
-            "STT_BASE_URL": "" if same else self.stt_url.GetValue().strip(),
-            "STT_API_KEY": "" if same else self._stt_key(),
-            "STT_MODEL": self.stt_model.GetValue().strip(),
-            "STT_API": STT_API_CHOICES[max(0, self.stt_api.GetSelection())][0],
-            "STT_LANGUAGE": self.stt_language.GetValue().strip(),
-            "STT_KEYTERMS": self.stt_keyterms.GetValue().strip() or "none",
+            "LLM_MODEL": preset["model"],
+            "STT_BASE_URL": DEFAULT_STT_URL,
+            "STT_API_KEY": self._stt_key(),
+            "STT_MODEL": DEFAULT_STT_MODEL,
+            "STT_API": DEFAULT_STT_API,
+            "STT_LANGUAGE": "",  # Sarvam detects the language of each piece of speech
             "LLM_EXTRA_BODY": self._extra_body(),
             "ANSWER_VOICE": ANSWER_VOICE_CHOICES[max(0, self.answer_voice.GetSelection())][0],
+            "EMBED_MODEL": DEFAULT_EMBED_MODEL,
+            "SUMMARY_MINUTES": SUMMARY_CHOICES[max(0, self.summary_minutes.GetSelection())][0],
+            "SAVE_SCREENSHOTS": "on" if self.save_screenshots.IsChecked() else "off",
         }
 
     def _extra_body(self) -> str:
@@ -258,18 +229,12 @@ class SettingsDialog(wx.Dialog):
         current = self.values.get("LLM_EXTRA_BODY", "")
         if current and current not in {p.get("extra_body", "") for p in PRESETS.values()}:
             return current
-        return PRESETS.get(self._provider(), {}).get("extra_body", "")
+        return PRESETS[PROVIDER]["extra_body"]
 
     def _missing(self, values: dict[str, str]) -> tuple[str, wx.Window] | None:
-        if values["LLM_PROVIDER"] == "stub":
-            return None
-        key_ctrl = self.key_shown if self.show_key.IsChecked() else self.key_hidden
-        stt_key_ctrl = self.stt_key_shown if self.show_key.IsChecked() else self.stt_key_hidden
-        checks = [("Base URL", "LLM_BASE_URL", self.base_url), ("API key", "LLM_API_KEY", key_ctrl),
-                  ("Model ID", "LLM_MODEL", self.model), ("Speech model ID", "STT_MODEL", self.stt_model)]
-        if not self.stt_same.IsChecked():
-            checks += [("Speech base URL", "STT_BASE_URL", self.stt_url),
-                       ("Speech API key", "STT_API_KEY", stt_key_ctrl)]
+        show = self.show_key.IsChecked()
+        checks = [("API key", "LLM_API_KEY", self.key_shown if show else self.key_hidden),
+                  ("Speech API key", "STT_API_KEY", self.stt_key_shown if show else self.stt_key_hidden)]
         for label, name, ctrl in checks:
             if not values[name]:
                 return label, ctrl

@@ -137,3 +137,31 @@ def test_misspelled_settings_folder_moves_to_saarthi(monkeypatch, tmp_path):
     d = user_settings_dir()
     assert d == tmp_path / "Saarthi" and (d / "voices").is_dir()
     assert not (tmp_path / "Saarathi").exists()
+
+
+def test_settings_window_saves_fixed_services_and_summary_choice(tmp_path, monkeypatch):
+    import wx
+
+    from app.ui import settings_dialog
+    from app.ui.settings_dialog import SettingsDialog, summary_choice
+
+    path = tmp_path / "settings.env"
+    path.write_text("LLM_PROVIDER=openrouter\nLLM_API_KEY=k1\nSTT_API_KEY=k2\nSTT_API=chat\n"
+                    "SUMMARY_MINUTES=5\nSTT_KEYTERMS=Priya\n", encoding="utf-8")
+    monkeypatch.setattr(settings_dialog, "settings_file", lambda: path)
+    monkeypatch.setattr(settings_dialog, "read_values", lambda: __import__("app.config").config.read_values(path))
+    app = wx.App()
+    dlg = SettingsDialog(None)
+    try:
+        assert not dlg.provider.IsEditable() and dlg.provider.GetValue() == "Nebius Token Factory"
+        assert not dlg.model.IsEditable() and not dlg.stt_model.IsEditable() and not dlg.stt_api.IsEditable()
+        assert dlg.summary_minutes.GetStringSelection() == "Every 5 minutes"
+        v = dlg.collect()
+    finally:
+        dlg.Destroy()
+        app.Destroy()
+    assert (v["LLM_PROVIDER"], v["LLM_API_KEY"], v["STT_API_KEY"], v["STT_API"], v["STT_MODEL"]) == \
+        ("nebius", "k1", "k2", "sarvam", "saaras:v4")
+    assert v["LLM_BASE_URL"] == "https://api.tokenfactory.nebius.com/v1" and v["SUMMARY_MINUTES"] == "5"
+    assert "STT_KEYTERMS" not in v  # not shown any more: what is in the file stays
+    assert [summary_choice(m) for m in ("", "2.5", "3", "5", "10", "x")] == [0, 0, 0, 1, 1, 0]

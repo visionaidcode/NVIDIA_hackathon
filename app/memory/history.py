@@ -44,6 +44,10 @@ class ScreenHistory:
         self._shots: list[Shot] = []
         self._count = 0
         self._lock = threading.Lock()
+        # Called (on the capture thread) for each new screen and each time the newest is seen
+        # again, so the meeting folder keeps every screen (app/rag/store.py).
+        self.on_new: Callable[[Shot], None] | None = None
+        self.on_seen: Callable[[Shot], None] | None = None
 
     def clear(self, started: float = 0.0) -> None:
         with self._lock:
@@ -54,14 +58,24 @@ class ScreenHistory:
     def add(self, ts: float, jpeg: bytes, width: int, height: int, unchanged: bool = False) -> None:
         with self._lock:
             if unchanged and self._shots:
-                self._shots[-1].last_ts = ts
+                shot = self._shots[-1]
+                shot.last_ts = ts
+                listener = self.on_seen
+            elif not jpeg:
                 return
-            if not jpeg:
-                return
-            self._count += 1
-            self._shots.append(Shot(self._count, ts, ts, jpeg, width, height))
-            if len(self._shots) > self.max_shots:
-                self._drop_one()
+            else:
+                self._count += 1
+                shot = Shot(self._count, ts, ts, jpeg, width, height)
+                self._shots.append(shot)
+                if len(self._shots) > self.max_shots:
+                    self._drop_one()
+                listener = self.on_new
+        if listener:
+            listener(shot)
+
+    def get(self, number: int) -> Shot | None:
+        with self._lock:
+            return next((s for s in self._shots if s.number == number), None)
 
     def _drop_one(self) -> None:
         """Drop the oldest quick, unnoted screen (scrolling, typing); else the oldest one."""

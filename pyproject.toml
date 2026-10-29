@@ -36,7 +36,7 @@ vad-torch = ["silero-vad>=5.1"]
 screenreader = ["accessible_output2>=0.17"]
 eval = ["jiwer>=3.0"]
 dev = ["pytest>=8.0"]
-build = ["nuitka>=2.0", "ordered-set", "zstandard"]
+build = ["pyinstaller>=6.10"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

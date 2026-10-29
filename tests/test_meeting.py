@@ -14,19 +14,29 @@ from app.stt.transcribe import Transcriber
 
 
 def test_transcript_file_has_speakers_and_is_written_line_by_line(tmp_path):
-    t = MeetingTranscript(tmp_path, clock=lambda: time.mktime((2026, 10, 22, 10, 40, 0, 0, 0, -1)))
+    now = [time.mktime((2026, 10, 22, 10, 40, 0, 0, 0, -1))]
+    t = MeetingTranscript(tmp_path, clock=lambda: now[0])
     assert not t.active
     path = t.start()
-    assert path.name == "Meeting 2026-10-22 10-40.txt" and t.active
+    assert (path.parent.name, path.name) == ("Meeting 22-10-2026 10-40", "transcript.txt") and t.active
     t.add(TranscriptLine(t.clock(), t.clock() + 2, "the button moves", "Priya"))
     assert "] Priya: the button moves" in path.read_text(encoding="utf-8")  # saved before stop
     t.add(TranscriptLine(t.clock(), t.clock() + 2, "ok", ""))
-    assert t.stop() == path and not t.active
-    text = path.read_text(encoding="utf-8")
-    assert "Speaker: ok" in text and "Ended" in text
+    (path.parent / "screens").mkdir()  # moves with the folder
+    now[0] += 35 * 60
+    stopped = t.stop()
+    assert stopped.parent.name == "Meeting 22-10-2026 10-40 to 11-15" and not t.active
+    assert not path.parent.exists() and (stopped.parent / "screens").is_dir()
+    text = stopped.read_text(encoding="utf-8")
+    assert "Speaker: ok" in text and "Ended 11:15" in text
     t.add(TranscriptLine(0, 1, "after stop"))
-    assert "after stop" not in path.read_text(encoding="utf-8")
-    assert t.start().name == "Meeting 2026-10-22 10-40 (2).txt"
+    assert "after stop" not in stopped.read_text(encoding="utf-8")
+    now[0] -= 35 * 60
+    assert t.start().parent.name == "Meeting 22-10-2026 10-40"
+    t.add_summary(t.clock(), t.clock() + 150, "Priya showed the sales slide.")
+    assert "] Summary (10:40:00 to 10:42:30): Priya showed the sales slide." in t.path.read_text(encoding="utf-8")
+    now[0] += 35 * 60
+    assert t.stop().parent.name == "Meeting 22-10-2026 10-40 to 11-15 (2)"  # same times: not overwritten
 
 
 def test_recent_keeps_newest_lines_within_limit(tmp_path):

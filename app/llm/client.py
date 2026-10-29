@@ -38,6 +38,17 @@ PAGE_INSTRUCTION = (
 )
 
 
+SUMMARY_INSTRUCTION = (
+    "Below is part of a meeting transcript with speaker names, and notes on what the shared "
+    "screen showed. Summarize it in at most three short sentences of plain text. Always keep "
+    "names, numbers, dates, decisions and tasks (who will do what). Never invent anything. "
+    "Write in the main language of the transcript. No lists or markdown."
+)
+
+# Embedding size asked for: Qwen3-Embedding gives 4096 by default; 1024 keeps meeting.json small.
+EMBED_DIMENSIONS = 1024
+
+
 def apply_fixes(text: str, fixes: tuple[tuple[str, str], ...]) -> str:
     """Rewrite known mishearings, e.g. "Vision 18" -> "VisionAid team" (whole words, any case)."""
     for heard, meant in fixes:
@@ -84,6 +95,10 @@ class ModelClient(Protocol):
 
     async def describe_page(self, jpeg: bytes) -> str: ...
 
+    async def summarize(self, text: str) -> str: ...
+
+    async def embed(self, texts: list[str]) -> list[list[float]]: ...
+
 
 class OpenAICompatClient:
     def __init__(self, settings: Settings, timeout: float = 30.0):
@@ -104,6 +119,7 @@ class OpenAICompatClient:
         self.stt_fixes = settings.stt_fixes
         self.audio_format = settings.audio_format
         self.extra_body = settings.extra_body
+        self.embed_model = settings.embed_model  # empty: no embeddings, keyword search only
         # Sarvam AI is not OpenAI-compatible: its own path and key header.
         self._sarvam = None
         if self.stt_api == "sarvam":
@@ -199,6 +215,23 @@ class OpenAICompatClient:
         )
         return (resp.choices[0].message.content or "").strip() if resp.choices else ""
 
+    async def summarize(self, text: str) -> str:
+        """A few sentences on one stretch of the meeting (see app.rag.index)."""
+        messages = [{"role": "system", "content": SUMMARY_INSTRUCTION}, {"role": "user", "content": text}]
+        resp = await self._client.chat.completions.create(
+            model=self.model, messages=messages, temperature=0, max_tokens=400,
+            extra_body=self.extra_body or None,
+        )
+        return (resp.choices[0].message.content or "").strip() if resp.choices else ""
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """One vector per text, for finding the minutes of a meeting that answer a question."""
+        if not self.embed_model:
+            raise RuntimeError("no embedding model set (EMBED_MODEL)")
+        resp = await self._client.embeddings.create(model=self.embed_model, input=texts,
+                                                    dimensions=EMBED_DIMENSIONS)
+        return [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
+
 
 class StubClient:
     """Fake responses so the app can be built and tested without cloud access."""
@@ -231,6 +264,22 @@ class StubClient:
     async def describe_page(self, jpeg: bytes) -> str:
         await asyncio.sleep(self.delay)
         return "Slide: Launch plan, beta on 15 November, 3 testers."
+
+    embed_model = "stub"
+
+    async def summarize(self, text: str) -> str:
+        await asyncio.sleep(self.delay)
+        return "Summary: " + " ".join(text.split()[-12:])
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Bag of words hashed into 64 numbers: texts sharing words come out close."""
+        out = []
+        for t in texts:
+            v = [0.0] * 64
+            for w in re.findall(r"\w+", t.lower()):
+                v[sum(map(ord, w)) % 64] += 1.0
+            out.append(v)
+        return out
 
 
 def make_client(settings: Settings) -> ModelClient:

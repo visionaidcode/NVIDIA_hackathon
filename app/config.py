@@ -24,6 +24,8 @@ STT_APIS = ("chat", "transcriptions", "sarvam")
 ANSWER_VOICES = ("human", "screenreader")
 
 AUTO = "auto"
+OFF = {"off", "0", "false", "no"}
+DEFAULT_EMBED_MODEL = "Qwen/Qwen3-Embedding-8B"
 
 # Words Sarvam should listen for (STT_KEYTERMS, comma separated; Sarvam allows 50, 64 chars each).
 DEFAULT_KEYTERMS = "VisionAid, NVIDIA, Nemotron, Nebius, Sarvam"
@@ -75,6 +77,13 @@ class Settings:
     # Who reads answers aloud, and where the Piper voice files (*.onnx + *.onnx.json) are.
     answer_voice: str = "human"
     voice_dir: str = ""
+    # Questions after a recording (app/rag): the embedding model that finds the right minutes of
+    # the meeting (empty = keyword search only), how often a summary is written, whether every
+    # screenshot is saved in the meeting folder, and how many screenshots one answer may get.
+    embed_model: str = ""
+    summary_seconds: float = 150.0
+    save_screenshots: bool = True
+    max_recording_images: int = 8  # Nemotron VL on Nebius: "At most 8 image(s) ... in one prompt"
 
     @property
     def is_stub(self) -> bool:
@@ -82,7 +91,7 @@ class Settings:
 
 
 APP_NAME = "Saarthi"
-APP_VERSION = "1.0"  # keep in step with pyproject.toml and scripts/build_nuitka.ps1
+APP_VERSION = "1.0"  # keep in step with pyproject.toml and packaging/version_info.txt
 # The folder's earlier names (newest first): "Saarathi" was a misspelling, "MeetingAssistant" the first name.
 OLD_APP_DIRS = ("Saarathi", "MeetingAssistant")
 
@@ -175,6 +184,10 @@ def load_settings(env_file: str | Path | None = AUTO) -> Settings:
         latency_log = path.parent / latency_log
 
     base_url, api_key, model = _env("LLM_BASE_URL"), _env("LLM_API_KEY"), _env("LLM_MODEL")
+    # Multilingual (Tamil, Hindi), on Nebius Token Factory; other providers default to keyword search.
+    embed_model = _env("EMBED_MODEL", DEFAULT_EMBED_MODEL if provider == "nebius" else "")
+    if embed_model.lower() == "none":
+        embed_model = ""
     settings = Settings(
         provider=provider,
         base_url=base_url,
@@ -196,9 +209,13 @@ def load_settings(env_file: str | Path | None = AUTO) -> Settings:
         max_frames_per_question=int(_env("MAX_FRAMES_PER_QUESTION", "4")),
         latency_log=str(latency_log),
         transcript_dir=_env("TRANSCRIPT_DIR") or str(default_transcript_dir()),
-        speaker_names=_env("SPEAKER_NAMES", "on").lower() not in {"off", "0", "false", "no"},
+        speaker_names=_env("SPEAKER_NAMES", "on").lower() not in OFF,
         answer_voice=answer_voice,
         voice_dir=_env("VOICE_DIR") or str(user_settings_dir() / "voices"),
+        embed_model=embed_model,
+        summary_seconds=max(30.0, float(_env("SUMMARY_MINUTES", "2.5")) * 60),
+        save_screenshots=_env("SAVE_SCREENSHOTS", "on").lower() not in OFF,
+        max_recording_images=max(1, int(_env("MAX_RECORDING_IMAGES", "8"))),
     )
     if not settings.is_stub:
         missing = [n for n, v in (("LLM_BASE_URL", settings.base_url),
